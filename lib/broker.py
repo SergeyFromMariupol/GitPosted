@@ -1,0 +1,417 @@
+"""Temporary root broker: fixed verbs, peer UID authentication, durable bounded jobs."""
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import hmac
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import socket
+import socketserver
+import struct
+import subprocess
+import threading
+import time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+import provision as p
+
+
+def failure(code, message):
+    raise p.Failure(code, message)
+
+
+def boolean(value):
+    if type(value) is not bool:
+        failure('INVALID_SETTINGS', 'Некорректный переключатель.')
+    return value
+
+
+def text(value, minimum=0, maximum=4096):
+    if not isinstance(value, str) or not minimum <= len(value.encode('utf-8')) <= maximum or re.search(r'[\x00-\x1f\x7f]', value):
+        failure('INVALID_SETTINGS', 'Некорректное значение настройки.')
+    return value
+
+
+def token(platform, value):
+    value = text(value, 16, 4096)
+    if value != value.strip() or re.search(r'\s', value) or platform not in ('telegram', 'max'):
+        failure('INVALID_TOKEN', 'Проверьте токен бота.')
+    if platform == 'telegram' and not re.fullmatch(r'[1-9][0-9]{5,11}:[A-Za-z0-9_-]{30,200}', value):
+        failure('INVALID_TOKEN', 'Проверьте формат токена Telegram.')
+    return value
+
+
+def settings(value):
+    if not isinstance(value, dict) or set(value) - {'admin', 'telegram', 'max', 'timezone', 'support_username', 'hcaptcha', 'mtproto'}:
+        failure('INVALID_SETTINGS', 'Некорректные настройки установки.')
+    admin = value.get('admin', {})
+    if not isinstance(admin, dict) or set(admin) - {'username', 'password', 'password_confirm'}:
+        failure('INVALID_SETTINGS', 'Некорректные настройки администратора.')
+    username = text(admin.get('username'), 3, 64)
+    if not re.fullmatch(r'[A-Za-z0-9_.@-]+', username):
+        failure('INVALID_SETTINGS', 'Некорректный логин администратора.')
+    password = text(admin.get('password'), 12, 72)
+    if len(password) < 12 or not hmac.compare_digest(password.encode(), text(admin.get('password_confirm'), 12, 72).encode()):
+        failure('INVALID_SETTINGS', 'Пароли не совпадают или слишком короткие.')
+    out = {'admin': {'username': username, 'password_hash': p.php_password(password)}}
+    for platform in ('telegram', 'max'):
+        item = value.get(platform)
+        if not isinstance(item, dict) or set(item) - {'enabled', 'token', 'takeover'}:
+            failure('INVALID_SETTINGS', 'Некорректные настройки бота.')
+        enabled = boolean(item.get('enabled'))
+        out[platform] = {'enabled': enabled, 'token': token(platform, item.get('token')) if enabled else '',
+                         'takeover': boolean(item.get('takeover', False)) if enabled else False}
+    timezone = text(value.get('timezone', 'Europe/Moscow'), 1, 64)
+    try:
+        ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        failure('INVALID_SETTINGS', 'Неизвестный часовой пояс.')
+    support = text(value.get('support_username', ''), 0, 33).removeprefix('@')
+    if support and not re.fullmatch(r'[A-Za-z0-9_]{5,32}', support):
+        failure('INVALID_SETTINGS', 'Некорректный контакт поддержки.')
+    out.update(timezone=timezone, support_username=support)
+    captcha = value.get('hcaptcha', {'enabled': False})
+    if not isinstance(captcha, dict) or set(captcha) - {'enabled', 'sitekey', 'secret'}:
+        failure('INVALID_SETTINGS', 'Некорректные параметры hCaptcha.')
+    enabled = boolean(captcha.get('enabled'))
+    key, secret = text(captcha.get('sitekey'), 36, 36) if enabled else '', text(captcha.get('secret'), 23, 131) if enabled else ''
+    if enabled and (not re.fullmatch(r'[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}', key) or not re.fullmatch(r'ES_[A-Za-z0-9_-]{20,128}', secret)):
+        failure('INVALID_SETTINGS', 'Некорректные ключи hCaptcha.')
+    out['hcaptcha'] = {'enabled': enabled, 'sitekey': key, 'secret': secret}
+    mt = value.get('mtproto', {'enabled': False})
+    if not isinstance(mt, dict) or set(mt) - {'enabled', 'api_id', 'api_hash'}:
+        failure('INVALID_SETTINGS', 'Некорректные параметры Telegram API.')
+    enabled = boolean(mt.get('enabled'))
+    api_id, api_hash = mt.get('api_id', 0) if enabled else 0, text(mt.get('api_hash'), 32, 32) if enabled else ''
+    if enabled and (not out['telegram']['enabled'] or type(api_id) is not int or not 1 <= api_id <= 2147483647 or not re.fullmatch(r'[a-fA-F0-9]{32}', api_hash)):
+        failure('INVALID_SETTINGS', 'Для Telegram API нужны подключённый бот и API ID/hash.')
+    out['mtproto'] = {'enabled': enabled, 'api_id': api_id, 'api_hash': api_hash}
+    return out
+
+
+def helper(request, timeout=45):
+    try:
+        child = subprocess.run(['runuser', '-u', p.APP_USER, '--', 'env', 'POSTED_CONFIG_FILE=' + str(p.CONFIG),
+                 '/usr/bin/php', '-d', 'display_errors=0', '-d', 'log_errors=0', p.INSTALL / 'bin/application.php'],
+                input=json.dumps(request).encode(), timeout=timeout, capture_output=True, check=False)
+        raw = child.stdout
+        if len(raw) > 65536:
+            failure('APPLICATION_FAILED', 'Приложение не подтвердило действие.')
+    except (OSError, subprocess.TimeoutExpired):
+        failure('APPLICATION_FAILED', 'Проверка приложения не завершилась.')
+    try:
+        result = json.loads(raw)
+    except (ValueError, TypeError):
+        failure('APPLICATION_FAILED', 'Приложение не подтвердило действие.')
+    if not isinstance(result, dict) or result.get('ok') is not True or child.returncode != 0:
+        code = result.get('error', {}).get('code', '') if isinstance(result, dict) else ''
+        safe = {'TAKEOVER_REQUIRED': 'У бота уже есть другой webhook. Подтвердите переключение.',
+                'PLATFORM_API_FAILED': 'Платформа не подтвердила запрос. Проверьте токен и доступ к API.',
+                'WEBHOOK_VERIFY_FAILED': 'Платформа не подтвердила адрес webhook.',
+                'SCHEMA_INVALID': 'Структура базы не прошла проверку.'}
+        raise p.Failure(code if code in safe else 'APPLICATION_FAILED', safe.get(code, 'Приложение не подтвердило действие.'))
+    return result['result']
+
+
+class Broker:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.checks = threading.BoundedSemaphore(2)
+        self.public = p.read_json(p.STATE / 'public.json')
+        self.private = p.read_json(p.STATE / 'private.json', {})
+        if not isinstance(self.public, dict) or not isinstance(self.private, dict):
+            failure('STATE_UNAVAILABLE', 'Состояние установщика недоступно.')
+        job = self.public.get('job', {})
+        if job.get('status') == 'running':
+            job['status'] = 'failed'
+            job['error'] = {'code': 'INTERRUPTED', 'message': 'Установка прервана. Продолжите существующую задачу.'}
+            for step in job.get('steps', []):
+                if step['status'] == 'running':
+                    step['status'] = 'failed'
+            self.save()
+
+    def save(self):
+        p.save_json(p.STATE / 'private.json', self.private)
+        p.save_json(p.STATE / 'public.json', self.public, True)
+
+    def dispatch(self, action, value):
+        if not isinstance(value, dict):
+            failure('INVALID_REQUEST', 'Некорректный запрос.')
+        fields = {'status': set(), 'enroll': {'code'}, 'check_bot': {'platform', 'token'},
+                  'start': {'settings'}, 'retry': {'job_id'}, 'host': {'host', 'email'}}
+        if not isinstance(action, str) or action not in fields or set(value) - fields[action]:
+            failure('INVALID_ACTION', 'Неизвестное действие или параметр.')
+        with self.lock:
+            if action == 'status':
+                if (p.STATE / 'installed.json').exists() and not self.public.get('installed'):
+                    # If the worker committed its marker but lost power before public save.
+                    with p.installer_lock():
+                        p.reconcile_installed()
+                    self.public = p.read_json(p.STATE / 'public.json')
+                    self.private = p.read_json(p.STATE / 'private.json', {})
+                return self.public.copy()
+            if self.public.get('installed') or (p.STATE / 'installed.json').exists():
+                failure('INSTALLED', 'Установка завершена.')
+            if action == 'enroll':
+                with p.installer_lock():
+                    code = text(value.get('code'), 32, 160)
+                    record = p.read_json(p.STATE / 'private.json', {}).get('enrollment', {})
+                    if record.get('consumed'):
+                        failure('CODE_USED', 'Ссылка уже использована.')
+                    if record.get('expires_at', 0) <= time.time():
+                        failure('CODE_EXPIRED', 'Ссылка устарела. Получите новую через SSH.')
+                    digest = hashlib.pbkdf2_hmac('sha256', code.encode(), record.get('salt', '').encode(), 250000).hex()
+                    if not hmac.compare_digest(digest, record.get('hash', '')):
+                        failure('INVALID_CODE', 'Ссылка недействительна.')
+                    self.private = p.read_json(p.STATE / 'private.json', {})
+                    self.private['enrollment']['consumed'] = True
+                    self.save()
+                    return {'enrolled': True}
+            if action == 'check_bot':
+                platform = value.get('platform')
+                checked_token = token(platform, value.get('token'))
+            elif action in ('start', 'host', 'retry'):
+                return self.prepare_job(action, value)
+            else:
+                failure('INVALID_ACTION', 'Неизвестное действие.')
+        if not self.checks.acquire(blocking=False):
+            failure('BUSY', 'Проверка ботов уже выполняется.')
+        try:
+            return helper({'action': 'check', 'platform': platform, 'token': checked_token}, timeout=35)
+        finally:
+            self.checks.release()
+
+    def prepare_job(self, action, value):
+        fd = os.open(p.STATE / 'installer.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                failure('BUSY', 'Операция установщика уже выполняется.')
+            # Load once under the same interprocess lock used by SSH link reissue.
+            self.private = p.read_json(p.STATE / 'private.json', {})
+            if action in ('start', 'host', 'retry'):
+                if self.public.get('job', {}).get('status') == 'running':
+                    failure('BUSY', 'Установка уже выполняется.')
+                if action == 'retry':
+                    job = self.public.get('job', {})
+                    if value.get('job_id') != job.get('id') or job.get('status') != 'failed':
+                        failure('INVALID_JOB', 'Нет этой незавершённой задачи.')
+                else:
+                    if self.private.get('settings'):
+                        failure('RESUME_REQUIRED', 'Продолжите уже созданную установку.')
+                    if action == 'start':
+                        self.private['settings'] = settings(value.get('settings'))
+                        ids = [('database', 'Подготовка отдельной базы данных'), ('config', 'Сохранение защищённых настроек'),
+                               ('schema', 'Создание структуры базы'), ('telegram', 'Подключение Telegram'),
+                               ('max', 'Подключение МАКС'), ('verify', 'Проверка приложения'),
+                               ('activate', 'Включение выбранных ботов'), ('finish', 'Завершение установки')]
+                    else:
+                        host = p.host_name(value.get('host'))
+                        email = text(value.get('email', ''), 0, 254)
+                        if email and not re.fullmatch(r'[A-Za-z0-9.!#$%&\x27*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}', email):
+                            failure('INVALID_SETTINGS', 'Некорректный email для сертификата.')
+                        if host == self.public['public_ip']:
+                            failure('INVALID_HOST', 'Укажите домен, направленный на сервер.')
+                        self.private['host_settings'] = {'host': host, 'email': email}
+                        ids = [('dns', 'Проверка DNS домена'), ('certificate', 'Получение сертификата'), ('nginx', 'Подключение домена')]
+                    self.public['job'] = {'id': secrets.token_hex(12), 'type': 'install' if action == 'start' else 'host',
+                                          'status': 'idle', 'steps': [{'id': key, 'title': title, 'status': 'pending'} for key, title in ids]}
+                self.public['job']['status'] = 'running'
+                self.public['job']['error'] = None
+                self.save()
+                threading.Thread(target=self.execute, args=(fd,), daemon=True).start()
+                fd = None  # Worker owns the open file description until job completion.
+                return {'job': self.public['job']}
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    def execute(self, fd):
+        try:
+            job = self.public['job']
+            for step in job['steps']:
+                if step['status'] in ('done', 'skipped'):
+                    continue
+                with self.lock:
+                    step['status'] = 'running'
+                    self.save()
+                result = self.install_step(step['id']) if job['type'] == 'install' else self.host_step(step['id'])
+                with self.lock:
+                    step['status'] = 'skipped' if result == 'skipped' else 'done'
+                    self.save()
+            with self.lock:
+                job['status'] = 'complete'
+                self.save()
+            if job['type'] == 'install':
+                # UI reads terminal metadata directly; the privileged socket is no longer needed.
+                try:
+                    p.run(['systemctl', 'disable', 'gitposted-installer.service'])
+                    threading.Timer(3, lambda: p.run(['systemctl', 'stop', 'gitposted-installer.service'])).start()
+                except p.Failure:
+                    pass  # Installed marker and locked HTTP routes remain authoritative.
+        except BaseException as error:
+            with self.lock:
+                if (p.STATE / 'installed.json').exists():
+                    p.reconcile_installed()
+                    self.public = p.read_json(p.STATE / 'public.json')
+                    self.private = p.read_json(p.STATE / 'private.json', {})
+                    return
+                job = self.public['job']
+                job['status'] = 'failed'
+                code = error.code if isinstance(error, p.Failure) else 'JOB_FAILED'
+                message = str(error) if isinstance(error, p.Failure) else 'Установка прервана. Проверьте состояние и повторите задачу.'
+                job['error'] = {'code': code, 'message': message}
+                for step in job['steps']:
+                    if step['status'] == 'running':
+                        step['status'] = 'failed'
+                self.save()
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    def write_config(self, config):
+        encoded = p.run(['php', '-r', 'echo "<?php\\ndeclare(strict_types=1);\\nreturn ".var_export(json_decode(stream_get_contents(STDIN),true,32,JSON_THROW_ON_ERROR),true).";\\n";'],
+                        data=json.dumps(config).encode(), safe='Не удалось подготовить конфигурацию.')
+        p.atomic(p.CONFIG, encoded, 0o600, *p.identity(p.APP_USER))
+
+    def install_step(self, step):
+        selected = self.private['settings']
+        config = self.private.get('config')
+        if step == 'database':
+            if not config:
+                config = {'bot_token': selected['telegram']['token'], 'bot_username': '', 'telegram_bot_enabled': False,
+                          'max_bot_token': selected['max']['token'], 'max_bot_username': '', 'max_bot_enabled': False,
+                          'notification_telegram_id': 0, 'notification_max_id': 0,
+                          'timezone': selected['timezone'], 'base_url': self.public.get('site_url', self.public['base_url']),
+                          'data_dir': str(p.DATA), 'service_admin_username': selected['support_username'],
+                          'service_admin_url': 'https://t.me/' + selected['support_username'] if selected['support_username'] else '',
+                          'webhook_secret': secrets.token_hex(32), 'max_webhook_secret': secrets.token_hex(32),
+                          'max_api_base_url': 'https://platform-api2.max.ru', 'max_ca_file': str(p.DATA / 'certs/russiantrustedca.pem'),
+                          'max_forbidden_reupload_limit_bytes': 536870912, 'max_seed_channels': [],
+                          'hcaptcha': selected['hcaptcha'], 'admin_auth': selected['admin'],
+                          'mtproto': {'api_id': selected['mtproto']['api_id'], 'api_hash': selected['mtproto']['api_hash'], 'phone': '', 'two_factor_password': '', 'source_bot': ''},
+                          'database': {'host': 'localhost', 'name': 'GitPosted', 'user': 'gitposted_app', 'password': secrets.token_hex(32), 'charset': 'utf8mb4'}}
+                self.private['config'] = config
+                self.save()
+            if not self.private.get('database_owned'):
+                existing = p.run(['mysql', '--protocol=socket', '-NBe', "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='GitPosted'"]).strip()
+                existing_user = p.run(['mysql', '--protocol=socket', '-NBe', "SELECT COUNT(*) FROM mysql.user WHERE User='gitposted_app'"]).strip()
+                if existing != b'0' or existing_user != b'0':
+                    failure('DATABASE_EXISTS', 'База или пользователь уже существуют. Автоматическая перезапись запрещена.')
+                self.private['database_owned'] = True
+                self.save()
+            dbpass = config['database']['password']  # Generated hex only; sent on stdin, never argv.
+            sql = ("CREATE DATABASE IF NOT EXISTS `GitPosted` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"
+                   "CREATE USER IF NOT EXISTS 'gitposted_app'@'localhost' IDENTIFIED BY '" + dbpass + "';\n"
+                   "GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,ALTER,INDEX,REFERENCES ON `GitPosted`.* TO 'gitposted_app'@'localhost';\n")
+            p.run(['mysql', '--protocol=socket', '--binary-mode=1'], data=sql.encode(), safe='Не удалось создать отдельную базу приложения.')
+        elif step == 'config':
+            for platform in ('telegram', 'max'):
+                if selected[platform]['enabled']:
+                    checked = helper({'action': 'check', 'platform': platform, 'token': selected[platform]['token']}, timeout=35)
+                    config['bot_username' if platform == 'telegram' else 'max_bot_username'] = checked['identity']['username']
+            self.save()
+            self.write_config(config)
+        elif step == 'schema':
+            helper({'action': 'initialize', 'config': config}, timeout=180)
+        elif step in ('telegram', 'max'):
+            if not selected[step]['enabled']:
+                return 'skipped'
+            helper({'action': 'register', 'platform': step, 'takeover': selected[step]['takeover']}, timeout=90)
+        elif step == 'verify':
+            helper({'action': 'verify', 'platforms': [x for x in ('telegram', 'max') if selected[x]['enabled']]}, timeout=90)
+        elif step == 'activate':
+            config['telegram_bot_enabled'] = selected['telegram']['enabled']
+            config['max_bot_enabled'] = selected['max']['enabled']
+            self.write_config(config)
+            self.save()
+        elif step == 'finish':
+            candidate = {**self.public, 'installed': True, 'admin_url': config['base_url'] + '/control/'}
+            p.configure_nginx(candidate)
+            p.save_json(p.STATE / 'installed.json', {'installed_at': int(time.time()), 'version': p.VERSION,
+                                                   'admin_url': candidate['admin_url']})
+            self.public.update(candidate)
+            # Retain configuration only in /etc/gitposted; remove duplicate root-held credentials.
+            self.private.pop('settings', None)
+            self.private.pop('config', None)
+            self.private.pop('enrollment', None)
+            (p.STATE / 'access.json').unlink(missing_ok=True)
+        return None
+
+    def host_step(self, step):
+        settings = self.private['host_settings']
+        host, ip = settings['host'], self.public['public_ip']
+        if step == 'dns':
+            p.dns_matches(host, ip)
+        elif step == 'certificate':
+            p.obtain_certificate(host, ip, settings['email'])
+        elif step == 'nginx':
+            candidate = {**self.public, 'site_host': host, 'site_url': 'https://' + host,
+                         'allowed_hosts': list(dict.fromkeys([self.public['host'], host]))}
+            p.configure_nginx(candidate)
+            self.public.update(candidate)
+
+
+class Server(socketserver.ThreadingUnixStreamServer):
+    daemon_threads = True
+    request_queue_size = 16
+
+
+class Handler(socketserver.StreamRequestHandler):
+    def handle(self):
+        try:
+            _, uid, _ = struct.unpack('3i', self.connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i')))
+            if uid != self.server.setup_uid:
+                return
+            self.connection.settimeout(50)
+            raw = self.rfile.readline(32769)
+            if not raw.endswith(b'\n') or len(raw) > 32768:
+                return
+            request = json.loads(raw)
+            if not isinstance(request, dict) or set(request) != {'action', 'payload'}:
+                return
+            result = self.server.broker.dispatch(request['action'], request['payload'])
+            envelope = {'ok': True, 'result': result}
+        except p.Failure as error:
+            envelope = {'ok': False, 'error': {'code': error.code, 'message': str(error)}}
+        except BaseException:
+            envelope = {'ok': False, 'error': {'code': 'REQUEST_FAILED', 'message': 'Действие не выполнено.'}}
+        try:
+            self.wfile.write(json.dumps(envelope, ensure_ascii=False).encode() + b'\n')
+        except OSError:
+            pass
+
+
+def main():
+    if os.geteuid() != 0:
+        raise SystemExit('Root broker required.')
+    if (p.STATE / 'installed.json').exists():
+        with p.installer_lock():
+            p.reconcile_installed()
+        return
+    path = p.STATE / 'broker.sock'
+    if path.exists() or path.is_symlink():
+        import stat
+        info = path.lstat()
+        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != 0:
+            raise SystemExit('Unsafe socket path.')
+        path.unlink()
+    server = Server(str(path), Handler)
+    server.setup_uid = p.identity(p.SETUP_USER)[0]
+    server.broker = Broker()
+    os.chown(path, 0, p.identity(p.SETUP_USER)[1])
+    os.chmod(path, 0o660)
+    try:
+        server.serve_forever(poll_interval=0.25)
+    finally:
+        server.server_close()
+        path.unlink(missing_ok=True)
+
+
+if __name__ == '__main__':
+    main()
