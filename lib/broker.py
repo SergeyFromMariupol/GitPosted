@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fcntl
+import copy
 import hashlib
 import hmac
 import json
@@ -121,9 +122,18 @@ class Broker:
     def __init__(self):
         self.lock = threading.RLock()
         self.checks = threading.BoundedSemaphore(2)
-        self.public = p.read_json(p.STATE / 'public.json')
         self.private = p.read_json(p.STATE / 'private.json', {})
-        if not isinstance(self.public, dict) or not isinstance(self.private, dict):
+        if not isinstance(self.private, dict):
+            failure('STATE_UNAVAILABLE', 'Состояние установщика недоступно.')
+        # This single private checkpoint commits settings and the matching job together.
+        # public.json is only its replaceable, credential-free HTTP projection.
+        checkpoint = self.private.get('public_state')
+        durable_job = self.private.get('job')
+        if isinstance(checkpoint, dict) and isinstance(durable_job, dict):
+            self.public = {**copy.deepcopy(checkpoint), 'job': copy.deepcopy(durable_job)}
+        else:
+            self.public = p.read_json(p.STATE / 'public.json')
+        if not isinstance(self.public, dict):
             failure('STATE_UNAVAILABLE', 'Состояние установщика недоступно.')
         job = self.public.get('job', {})
         if job.get('status') == 'running':
@@ -133,16 +143,29 @@ class Broker:
                 if step['status'] == 'running':
                     step['status'] = 'failed'
             self.save()
+        elif isinstance(checkpoint, dict) and isinstance(durable_job, dict):
+            p.save_json(p.STATE / 'public.json', self.public, True)
 
     def save(self):
+        self.private['job'] = copy.deepcopy(self.public.get('job', {}))
+        self.private['public_state'] = copy.deepcopy({key: value for key, value in self.public.items() if key != 'job'})
         p.save_json(p.STATE / 'private.json', self.private)
         p.save_json(p.STATE / 'public.json', self.public, True)
+
+    def revisable(self):
+        job = self.public.get('job', {})
+        config = self.private.get('config', {})
+        activation = [step for step in job.get('steps', []) if step.get('id') == 'activate']
+        return (job.get('type') == 'install' and job.get('status') == 'failed'
+                and bool(self.private.get('settings')) and not (p.STATE / 'installed.json').exists()
+                and not config.get('telegram_bot_enabled') and not config.get('max_bot_enabled')
+                and len(activation) == 1 and activation[0].get('status') == 'pending')
 
     def dispatch(self, action, value):
         if not isinstance(value, dict):
             failure('INVALID_REQUEST', 'Некорректный запрос.')
         fields = {'status': set(), 'enroll': {'code'}, 'check_bot': {'platform', 'token'},
-                  'start': {'settings'}, 'retry': {'job_id'}, 'host': {'host', 'email'}}
+                  'start': {'settings'}, 'revise': {'job_id', 'settings'}, 'retry': {'job_id'}, 'host': {'host', 'email'}}
         if not isinstance(action, str) or action not in fields or set(value) - fields[action]:
             failure('INVALID_ACTION', 'Неизвестное действие или параметр.')
         with self.lock:
@@ -153,7 +176,10 @@ class Broker:
                         p.reconcile_installed()
                     self.public = p.read_json(p.STATE / 'public.json')
                     self.private = p.read_json(p.STATE / 'private.json', {})
-                return self.public.copy()
+                result = copy.deepcopy(self.public)
+                if isinstance(result.get('job'), dict):
+                    result['job']['can_revise'] = self.revisable()
+                return result
             if self.public.get('installed') or (p.STATE / 'installed.json').exists():
                 failure('INSTALLED', 'Установка завершена.')
             if action == 'enroll':
@@ -174,7 +200,7 @@ class Broker:
             if action == 'check_bot':
                 platform = value.get('platform')
                 checked_token = token(platform, value.get('token'))
-            elif action in ('start', 'host', 'retry'):
+            elif action in ('start', 'host', 'retry', 'revise'):
                 return self.prepare_job(action, value)
             else:
                 failure('INVALID_ACTION', 'Неизвестное действие.')
@@ -194,13 +220,41 @@ class Broker:
                 failure('BUSY', 'Операция установщика уже выполняется.')
             # Load once under the same interprocess lock used by SSH link reissue.
             self.private = p.read_json(p.STATE / 'private.json', {})
-            if action in ('start', 'host', 'retry'):
+            if action in ('start', 'host', 'retry', 'revise'):
                 if self.public.get('job', {}).get('status') == 'running':
                     failure('BUSY', 'Установка уже выполняется.')
-                if action == 'retry':
+                if action in ('retry', 'revise'):
                     job = self.public.get('job', {})
                     if value.get('job_id') != job.get('id') or job.get('status') != 'failed':
                         failure('INVALID_JOB', 'Нет этой незавершённой задачи.')
+                    if action == 'revise':
+                        if not self.revisable():
+                            failure('REVISE_DENIED', 'Боты уже включены. Продолжите завершение существующей установки.')
+                        actual = helper({'action': 'installation_state'}, timeout=15)
+                        if (not isinstance(actual, dict) or set(actual) != {'configured', 'telegram_enabled', 'max_enabled'}
+                                or any(type(actual[key]) is not bool for key in actual)
+                                or actual['telegram_enabled'] or actual['max_enabled']):
+                            failure('REVISE_DENIED', 'Боты уже включены или состояние не подтверждено. Продолжите существующую установку.')
+                        revised = settings(value.get('settings'))
+                        config = self.private.get('config')
+                        if config:
+                            for platform, token_key, username_key, secret_key in (
+                                    ('telegram', 'bot_token', 'bot_username', 'webhook_secret'),
+                                    ('max', 'max_bot_token', 'max_bot_username', 'max_webhook_secret')):
+                                if config.get(token_key, '') != revised[platform]['token']:
+                                    config[secret_key] = secrets.token_hex(32)
+                                config[token_key] = revised[platform]['token']
+                                config[username_key] = ''
+                            config.update(telegram_bot_enabled=False, max_bot_enabled=False,
+                                          timezone=revised['timezone'], service_admin_username=revised['support_username'],
+                                          service_admin_url='https://t.me/' + revised['support_username'] if revised['support_username'] else '',
+                                          hcaptcha=revised['hcaptcha'], admin_auth=revised['admin'],
+                                          mtproto={'api_id': revised['mtproto']['api_id'], 'api_hash': revised['mtproto']['api_hash'],
+                                                   'phone': '', 'two_factor_password': '', 'source_bot': ''})
+                        self.private['settings'] = revised
+                        for step in job['steps']:
+                            if step['id'] in ('config', 'telegram', 'max', 'verify', 'activate', 'finish'):
+                                step['status'] = 'pending'
                 else:
                     if self.private.get('settings'):
                         failure('RESUME_REQUIRED', 'Продолжите уже созданную установку.')
@@ -223,8 +277,27 @@ class Broker:
                                           'status': 'idle', 'steps': [{'id': key, 'title': title, 'status': 'pending'} for key, title in ids]}
                 self.public['job']['status'] = 'running'
                 self.public['job']['error'] = None
-                self.save()
-                threading.Thread(target=self.execute, args=(fd,), daemon=True).start()
+                try:
+                    self.save()
+                    threading.Thread(target=self.execute, args=(fd,), daemon=True).start()
+                except BaseException:
+                    # A failed projection write or worker launch must never leave a running
+                    # job without a worker. The private checkpoint makes it retryable.
+                    self.public['job']['status'] = 'failed'
+                    self.public['job']['error'] = {'code': 'INTERRUPTED', 'message': 'Запуск прерван. Продолжите существующую задачу.'}
+                    try:
+                        self.save()
+                    except BaseException:
+                        durable = p.read_json(p.STATE / 'private.json', {})
+                        self.private = durable
+                        if isinstance(durable.get('public_state'), dict) and isinstance(durable.get('job'), dict):
+                            self.public = {**copy.deepcopy(durable['public_state']), 'job': copy.deepcopy(durable['job'])}
+                            if self.public['job'].get('status') == 'running':
+                                self.public['job']['status'] = 'failed'
+                                self.public['job']['error'] = {'code': 'INTERRUPTED', 'message': 'Запуск прерван. Продолжите существующую задачу.'}
+                        else:
+                            self.public = p.read_json(p.STATE / 'public.json')
+                    raise
                 fd = None  # Worker owns the open file description until job completion.
                 return {'job': self.public['job']}
         finally:

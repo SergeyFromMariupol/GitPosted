@@ -27,6 +27,11 @@ php -l web/api.php
 php tests/wizard-test.php
 python3 -B tests/provision-test.py
 python3 -B tests/broker-review-test.py
+php tests/platform-audit-test.php
+php tests/wizard-audit-test.php
+python3 -B tests/wizard-audit-test.py
+python3 -B tests/provision-audit-test.py
+node --test tests/wizard-audit-ui.test.cjs
 ```
 
 Тест мастера использует адаптеры состояния, broker, часов и session в памяти.
@@ -54,6 +59,33 @@ python3 -B tests/broker-review-test.py
   продолжение. Certbot и Python caches не изменяют проверяемый пакет.
 - Root broker проверяет UID сокета, фиксированные actions и повторно валидирует
   payload; произвольные shell/SQL/path/env параметры не исполняются.
+
+## Изолированный прогон PHP, сокета и MySQL
+
+Только на выделенной тестовой Ubuntu с уже установленными зависимостями и
+пользователями `gitposted`/`gitposted-setup`:
+
+```bash
+sudo python3 -B tests/integration-test.py --run
+```
+
+Прогон проходит весь HTTP-мастер, настоящий Unix broker с проверкой UID,
+создание MySQL schema и конфигурации, проверку пароля и активацию для четырёх
+вариантов: без ботов, Telegram, МАКС, оба. Пятый вариант отзывает проверенный
+токен до сохранения config и исправляет его через тот же незавершённый мастер.
+Для каждого варианта используются свежие случайные SQL-имена, проверенные на
+отсутствие; после прогона удаляются только его БД, пользователь, процессы и
+временный каталог. Текущая рабочая БД и config не используются.
+
+API платформ перехватывается внутри временной копии helper. Отправки сообщений
+запрещены самим fixture. HTTPS SAPI моделируется loopback-роутером; этот тест
+не подтверждает настоящий TLS, nginx, ACME или работу реальных токенов.
+Их проверяют отдельно на сервере. Без `--run` скрипт только показывает справку.
+
+Дополнительные regression проверяют ранний сбой apt и продолжение, IPv4 без
+IPv6, права и symlink ресурсов, долговечный checkpoint, конкурентный статус,
+исправление ошибочного токена до активации, подтверждение переноса чужого
+webhook и совпадение MAX webhook secret при замене токена.
 
 ## Свежая Ubuntu 24.04 — реальная приёмка
 

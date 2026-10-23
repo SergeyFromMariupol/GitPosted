@@ -56,10 +56,10 @@ final class WizardBroker
 
     public function __invoke(string $action, array $payload): array
     {
-        if (!in_array($action, ['status', 'enroll', 'check_bot', 'start', 'retry', 'host'], true)) {
+        if (!in_array($action, ['status', 'enroll', 'check_bot', 'start', 'revise', 'retry', 'host'], true)) {
             throw new \RuntimeException('Unsupported broker action.');
         }
-        $timeout = $action === 'check_bot' ? 45 : 5;
+        $timeout = $action === 'check_bot' ? 45 : ($action === 'revise' ? 25 : 5);
         $connection = @stream_socket_client('unix://' . $this->socket, $code, $message, $timeout, STREAM_CLIENT_CONNECT);
         if ($connection === false) throw new \RuntimeException('Installer broker unavailable.');
         try {
@@ -172,6 +172,19 @@ final class Wizard
             $secure = self::secure($server) && $public['tls_ready'] === true;
             $authenticated = $secure && $this->authenticated();
             if ($method === 'GET' && $action === 'status') {
+                $broker = null;
+                if ($authenticated && !$public['installed']) {
+                    $this->rate('status', $server, 120, 60);
+                    $broker = $this->call('status', []);
+                    // Job and host/completion metadata must describe the same root checkpoint.
+                    // Never spread arbitrary broker fields into the HTTP response.
+                    $fresh = array_intersect_key($broker, array_flip(['installed', 'tls_ready', 'base_url', 'host',
+                        'public_ip', 'site_url', 'site_host', 'allowed_hosts']));
+                    $public = array_replace($public, $fresh);
+                    if (!is_bool($public['installed'] ?? null) || !is_bool($public['tls_ready'] ?? null)
+                        || !self::trustedHost($server, $public)) throw new \RuntimeException('Invalid root status.');
+                    $secure = self::secure($server) && $public['tls_ready'] === true;
+                }
                 $result = ['authenticated' => $authenticated && !$public['installed'], 'secure' => $secure,
                     'installed' => $public['installed'], 'base_url' => (string) $public['base_url'], 'host' => (string) $public['host'],
                     'public_ip' => (string) ($public['public_ip'] ?? ''), 'tls_ready' => $public['tls_ready'],
@@ -179,9 +192,7 @@ final class Wizard
                     'site_host' => (string) ($public['site_host'] ?? $public['host']), 'job' => null];
                 $result['admin_url'] = rtrim($result['site_url'], '/') . '/control/';
                 if ($authenticated && !$public['installed']) {
-                    $this->rate('status', $server, 120, 60);
                     $result['csrf'] = $this->session['csrf'];
-                    $broker = $this->call('status', []);
                     $result['job'] = $this->job($broker['job'] ?? null);
                 }
                 return ['status' => 200, 'headers' => $headers, 'body' => ['ok' => true, 'result' => $result]];
@@ -190,9 +201,9 @@ final class Wizard
             if ($public['installed']) throw new WizardError('INSTALLED', 'Установка завершена. Мастер закрыт.', 410);
             if (!$secure) throw new WizardError('HTTPS_REQUIRED', 'Сначала настройте HTTPS. Не вводите секреты через HTTP.', 403);
             $this->origin($server, 'https://' . (string) $server['HTTP_HOST']);
-            if (!in_array($action, ['login', 'logout', 'check_bot', 'start', 'retry', 'host'], true)) throw new WizardError('INVALID_ACTION', 'Неизвестное действие.', 404);
+            if (!in_array($action, ['login', 'logout', 'check_bot', 'start', 'revise', 'retry', 'host'], true)) throw new WizardError('INVALID_ACTION', 'Неизвестное действие.', 404);
             if ($action !== 'login') {
-                if (!$authenticated) throw new WizardError('AUTH_REQUIRED', 'Введите одноразовый код из SSH.', 401);
+                if (!$authenticated) throw new WizardError('AUTH_REQUIRED', 'Откройте ссылку установки из SSH-консоли.', 401);
                 $csrf = (string) ($server['HTTP_X_CSRF_TOKEN'] ?? '');
                 if (strlen($csrf) !== 64 || !hash_equals((string) $this->session['csrf'], $csrf)) throw new WizardError('CSRF_FAILED', 'Обновите страницу мастера и повторите действие.', 403);
             }
@@ -231,10 +242,15 @@ final class Wizard
                 foreach (array_slice((array) ($checked['existing_urls'] ?? []), 0, 20) as $url) {
                     if (is_string($url) && strlen($url) <= 2048 && filter_var($url, FILTER_VALIDATE_URL) && in_array(parse_url($url, PHP_URL_SCHEME), ['http', 'https'], true)) $result['existing_urls'][] = $url;
                 }
-            } elseif ($action === 'start') {
-                $this->only($payload, ['settings']);
+            } elseif ($action === 'start' || $action === 'revise') {
+                $this->only($payload, $action === 'revise' ? ['job_id', 'settings'] : ['settings']);
                 $this->rate('start', $server, 6, 300);
-                $result = ['job' => $this->job($this->call('start', ['settings' => $this->settings($payload['settings'] ?? null)])['job'] ?? null)];
+                $request = ['settings' => $this->settings($payload['settings'] ?? null)];
+                if ($action === 'revise') {
+                    $request['job_id'] = $this->string($payload['job_id'] ?? null, 1, 100);
+                    if (preg_match('/^[a-zA-Z0-9_-]+$/D', $request['job_id']) !== 1) throw new WizardError('INVALID_SETTINGS', 'Некорректный номер установки.');
+                }
+                $result = ['job' => $this->job($this->call($action, $request)['job'] ?? null)];
             } elseif ($action === 'retry') {
                 $this->only($payload, ['job_id']);
                 $this->rate('retry', $server, 10, 300);
@@ -348,6 +364,8 @@ final class Wizard
             'TAKEOVER_REQUIRED' => 'У бота уже настроен другой webhook. Явно подтвердите его переключение.',
             'INSTALL_BUSY', 'BUSY' => 'Установка уже выполняется. Дождитесь результата.',
             'INSTALLED', 'LOCKED' => 'Установка завершена. Мастер закрыт.',
+            'REVISE_DENIED' => 'Включение ботов уже начиналось. Продолжите завершение существующей установки.',
+            'INTERRUPTED' => 'Установка прервана. Можно продолжить сохранённую задачу.',
             'CODE_USED', 'CODE_EXPIRED' => 'Одноразовый код уже использован или устарел. Выпустите новый код через SSH командой bootstrap.sh --resume.',
             'INVALID_SETTINGS', 'VALIDATION_FAILED' => 'Проверьте настройки установки.',
             'HOST_INVALID', 'DNS_MISMATCH' => 'Проверьте домен и его DNS-записи: он должен вести на этот сервер.',
@@ -364,7 +382,8 @@ final class Wizard
         if ($id !== '' && preg_match('/^[a-zA-Z0-9_-]{1,100}$/D', $id) !== 1) throw new \RuntimeException('Invalid job identifier.');
         $type = $job['type'] ?? 'install';
         if (!in_array($type, ['install', 'host'], true)) throw new \RuntimeException('Invalid job type.');
-        $result = ['id' => $id, 'type' => $type, 'status' => $job['status'], 'steps' => [], 'error' => null];
+        $result = ['id' => $id, 'type' => $type, 'status' => $job['status'], 'steps' => [], 'error' => null,
+            'can_revise' => ($job['can_revise'] ?? false) === true];
         foreach (array_slice((array) ($job['steps'] ?? []), 0, 40) as $step) {
             if (!is_array($step) || !in_array($step['status'] ?? '', ['pending', 'running', 'done', 'skipped', 'failed'], true)) throw new \RuntimeException('Invalid job step.');
             $result['steps'][] = ['id' => $this->safeText($step['id'] ?? '', 64), 'title' => $this->safeText($step['title'] ?? '', 160), 'status' => $step['status']];

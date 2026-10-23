@@ -296,11 +296,12 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
                         <input type="hidden" name="action" value="telegram_config">
                         <input type="hidden" name="return_page" value="telegram">
                         <div class="bot-panel__field-grid">
-                            <label class="field"><span>Username бота</span><input name="bot_username" value="<?= e(ltrim((string) ($config['bot_username'] ?? ''), '@')) ?>" required></label>
+                            <label class="field"><span>Username бота</span><input name="bot_username" maxlength="32" value="<?= e(ltrim((string) ($config['bot_username'] ?? ''), '@')) ?>" required></label>
                             <label class="field"><span>Часовой пояс хранения</span><input name="timezone" value="<?= e($config['timezone'] ?? 'Europe/Moscow') ?>" readonly required><small>Часовой пояс хранения фиксирован. Часовой пояс отображения меняется в настройках бота.</small></label>
                             <label class="field"><span>Username поддержки (необязательно)</span><input name="service_admin_username" value="<?= e(ltrim((string) ($config['service_admin_username'] ?? ''), '@')) ?>"></label>
                             <label class="field"><span>Новый токен</span><input name="bot_token" type="password" autocomplete="new-password" placeholder="Пусто — оставить действующий"></label>
                             <label class="field"><span>Новый секрет webhook</span><input name="webhook_secret" type="password" autocomplete="new-password" placeholder="Пусто — оставить действующий"></label>
+                            <label class="field field--checkbox"><span><input name="takeover_webhook" type="checkbox" value="1"> Перенести бота из другого сервиса</span><small>Разрешаю заменить чужой webhook. Предыдущий сервис перестанет получать события этого бота.</small></label>
                         </div>
                     </form>
                 </div>
@@ -360,10 +361,11 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
                         <input type="hidden" name="action" value="max_config">
                         <input type="hidden" name="return_page" value="max">
                         <div class="bot-panel__field-grid">
-                            <label class="field"><span>Username бота</span><input name="max_bot_username" value="<?= e(ltrim((string) ($config['max_bot_username'] ?? ''), '@')) ?>" required></label>
+                            <label class="field"><span>Username бота</span><input name="max_bot_username" maxlength="60" value="<?= e(ltrim((string) ($config['max_bot_username'] ?? ''), '@')) ?>" required></label>
                             <label class="field"><span>API URL МАКС</span><input name="max_api_base_url" type="url" value="<?= e($config['max_api_base_url'] ?? 'https://platform-api2.max.ru') ?>" readonly required></label>
                             <label class="field"><span>Новый токен</span><input name="max_bot_token" type="password" autocomplete="new-password" placeholder="Пусто — оставить действующий"></label>
                             <label class="field"><span>Новый секрет webhook</span><input name="max_webhook_secret" type="password" autocomplete="new-password" placeholder="Пусто — оставить действующий"></label>
+                            <label class="field field--checkbox"><span><input name="takeover_webhook" type="checkbox" value="1"> Перенести бота из другого сервиса</span><small>Разрешаю удалить прежние подписки после подтверждения нового webhook GitPosted.</small></label>
                         </div>
                     </form>
                 </div>

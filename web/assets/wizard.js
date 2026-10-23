@@ -58,6 +58,7 @@
             id: typeof job.id === 'string' || typeof job.id === 'number' ? String(job.id) : '',
             type: job.type === 'host' ? 'host' : 'install',
             status: JOB_STATUSES.includes(job.status) ? job.status : 'idle',
+            canRevise: job.can_revise === true,
             steps: (Array.isArray(job.steps) ? job.steps : []).map((step, index) => ({
                 id: typeof step.id === 'string' ? step.id : String(index),
                 title: typeof step.title === 'string' ? step.title : 'Этап установки',
@@ -138,6 +139,7 @@
     const state = {
         status: null, csrf: '', step: 0, maxStep: 0, busy: false, pendingMutation: null,
         poll: null, refreshId: 0, checks: {}, secretHistory: [], hostReady: false, loginPending: false,
+        editingJobId: '', reviseJobId: '',
         entryError: invalidSetupLink ? 'Ссылка недействительна. Получите новую ссылку командой --resume в SSH-консоли сервера.' : ''
     };
     for (const platform of PLATFORMS) state.checks[platform] = { token: '', identity: null, foreignUrls: [], sequence: 0, checking: false };
@@ -171,7 +173,7 @@
         state.busy = busy;
         $('settings-form').inert = busy;
         $('settings-form').setAttribute('aria-busy', String(busy));
-        for (const id of ['login-refresh', 'logout-button', 'host-submit', 'job-retry']) $(id).disabled = busy;
+        for (const id of ['login-refresh', 'logout-button', 'host-submit', 'job-retry', 'job-edit']) $(id).disabled = busy;
         updateNavigation();
     }
 
@@ -180,7 +182,7 @@
             const error = new Error('Сеанс настройки истёк. Откройте новую ссылку из SSH-консоли сервера.'); error.code = 'AUTH_REQUIRED'; throw error;
         }
         const controller = new AbortController();
-        const timer = root.setTimeout(() => controller.abort(), action === 'check_bot' ? 50000 : 12000);
+        const timer = root.setTimeout(() => controller.abort(), action === 'check_bot' ? 50000 : (action === 'revise' ? 30000 : 12000));
         try {
             const headers = { Accept: 'application/json' };
             const options = { method: payload === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error', headers, signal: controller.signal };
@@ -257,10 +259,16 @@
         }
         enrollmentCode = null;
         const job = normalizedJob(status.job);
-        if (job.status === 'running' || job.status === 'failed') {
+        if (job.status === 'running' || (job.status === 'failed' && state.editingJobId !== job.id)) {
+            state.editingJobId = ''; state.reviseJobId = '';
             state.pendingMutation = null; renderJob(job); showScreen('job-screen');
             if (job.status === 'running') schedulePoll(); else cancelPoll();
             return;
+        }
+        // Completion is committed by root before the public HTTP view is materialized.
+        // Keep polling a terminal install until the matching installed metadata arrives.
+        if (job.type === 'install' && job.status === 'complete') {
+            state.pendingMutation = null; renderJob(job); showScreen('job-screen'); schedulePoll(); return;
         }
         if (job.type === 'host' && job.status === 'complete') state.hostReady = true;
         if (job.status === 'complete') state.pendingMutation = null;
@@ -270,6 +278,7 @@
         cancelPoll();
         setText('server-base-url', status.site_url || status.base_url || '—');
         setText('server-public-ip', status.public_ip || status.host || '—');
+        $('domain-details').hidden = Boolean(state.reviseJobId);
         if (state.hostReady || (status.site_host && status.site_host !== status.host)) {
             $('host-ready').hidden = false;
             setText('host-ready-url', status.site_url || status.base_url || '');
@@ -313,7 +322,7 @@
         $('previous-step').hidden = state.step === 0;
         $('previous-step').disabled = state.busy;
         $('next-step').disabled = state.busy || Object.values(state.checks).some((check) => check.checking);
-        $('next-step').textContent = state.step === 4 ? 'Установить GitPosted →' : 'Далее →';
+        $('next-step').textContent = state.step === 4 ? (state.reviseJobId ? 'Сохранить и продолжить →' : 'Установить GitPosted →') : 'Далее →';
         $('next-step').setAttribute('aria-busy', String(state.busy));
         setText('step-caption', 'Шаг ' + (state.step + 1) + ' из 5');
     }
@@ -453,6 +462,9 @@
         setError('job-error', job.status === 'failed' ? job.error || 'Не удалось завершить этап. Проверьте состояние сервера и повторите.' : '');
         $('job-retry').hidden = job.status !== 'failed' || !job.id;
         $('job-retry').disabled = state.busy;
+        $('job-edit').hidden = job.status !== 'failed' || !job.id || (!host && !job.canRevise);
+        $('job-edit').disabled = state.busy;
+        $('job-edit').textContent = host ? 'Изменить домен или продолжить по IP' : 'Изменить настройки';
     }
 
     async function startInstall() {
@@ -462,8 +474,9 @@
         for (const secret of [config.admin.password, config.admin.password_confirm, config.telegram.token, config.max.token, config.hcaptcha.secret, config.mtproto.api_hash]) rememberSecret(secret);
         state.pendingMutation = { type: 'install' };
         try {
-            const result = await api('start', { settings: config });
+            const result = await api(state.reviseJobId ? 'revise' : 'start', state.reviseJobId ? { job_id: state.reviseJobId, settings: config } : { settings: config });
             clearSecrets();
+            state.editingJobId = ''; state.reviseJobId = '';
             if (result.job) { state.status.job = result.job; state.pendingMutation = null; renderJob(normalizedJob(result.job)); showScreen('job-screen'); }
             else { renderJob(normalizedJob({})); showScreen('job-screen'); }
             await refreshStatus(false);
@@ -533,6 +546,18 @@
         try { await api('retry', { job_id: job.id }); await refreshStatus(false); }
         catch (error) { setError('job-error', error.definitive ? error.message : 'Ответ о повторе этапа не получен. Сначала проверьте состояние задания.'); await refreshStatus(false); }
         finally { setBusy(false); }
+    });
+    $('job-edit').addEventListener('click', () => {
+        const job = normalizedJob(state.status && state.status.job);
+        if (state.busy || job.status !== 'failed' || !job.id || (job.type !== 'host' && !job.canRevise)) return;
+        cancelPoll(); clearSecrets();
+        for (const platform of PLATFORMS) invalidateCheck(platform);
+        state.pendingMutation = null; state.editingJobId = job.id;
+        state.reviseJobId = job.type === 'install' ? job.id : '';
+        state.step = job.type === 'host' ? 0 : 1;
+        state.maxStep = state.step;
+        applyStatus(state.status);
+        if (job.type === 'install') setError('settings-error', 'Введите пароль и выбранные токены заново. Существующая база и её структура будут сохранены.');
     });
     $('logout-button').addEventListener('click', async () => {
         if (state.busy) return;

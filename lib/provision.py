@@ -5,6 +5,7 @@ import argparse
 from contextlib import contextmanager
 import fcntl
 import hashlib
+import importlib.util
 import ipaddress
 import json
 import os
@@ -14,12 +15,13 @@ import grp
 import secrets
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import time
 from urllib.parse import urlsplit
 
-VERSION = '0.1.0-rc.2'
+VERSION = '0.1.0-rc.3'
 INSTALL = Path('/opt/gitposted-installer')
 APP = Path('/opt/gitposted')
 STATE = Path('/var/lib/gitposted-installer')
@@ -193,13 +195,37 @@ def preflight(resume=False):
                     raise Failure('PORT_BUSY', 'Порты 80, 443 или 3306 заняты. Нужен чистый сервер.') from None
 
 
+def validate_source(source):
+    """Audit the complete source before any persistent bootstrap write.
+
+    A root-owned leaf inside somebody else's writable home is not trusted:
+    that ancestor could be renamed while root reads the package. Root-owned
+    sticky temporary directories are safe for the loader's private root tree.
+    """
+    source = Path(source)
+    try:
+        if not source.is_absolute() or source.resolve(strict=True) != source or not source.is_dir():
+            raise ValueError()
+        for parent in source.parents:
+            info = parent.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 \
+                    or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX):
+                raise ValueError()
+        paths = [source, *sorted(source.rglob('*'))]
+        for path in paths:
+            info = path.lstat()
+            if info.st_uid != 0 or info.st_mode & 0o022 \
+                    or not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+                raise ValueError()
+        return paths[1:]
+    except (OSError, RuntimeError, ValueError):
+        raise Failure('UNSAFE_PACKAGE', 'Пакет и его каталоги должны принадлежать root и быть закрыты от чужой записи; ссылки не разрешены.') from None
+
+
 def copy_tree(source, target):
     source, target = Path(source), Path(target)
-    if source.resolve() != source or source.is_symlink() or source.stat().st_uid != 0 or source.stat().st_mode & 0o022:
-        raise Failure('UNSAFE_PACKAGE', 'Исходный пакет должен принадлежать root и быть закрыт от чужой записи.')
-    for path in sorted(source.rglob('*')):
-        if path.is_symlink() or path.stat().st_uid != 0 or path.stat().st_mode & 0o022:
-            raise Failure('UNSAFE_PACKAGE', 'Символические ссылки в пакете не разрешены.')
+    paths = validate_source(source)
+    for path in paths:
         relative = path.relative_to(source)
         destination = target / relative
         if path.is_dir():
@@ -209,6 +235,48 @@ def copy_tree(source, target):
             atomic(destination, path.read_bytes(), 0o644)
         else:
             raise Failure('UNSAFE_PACKAGE', 'Пакет содержит необычный файл.')
+
+
+def package_files(source):
+    """Return only the builder's public allowlist, after read-only validation.
+
+    A developer checkout can contain .git credentials; copy_tree must never
+    expose that metadata (or an accidentally added private file) under /opt.
+    The source has already been proved immutable to non-root before its
+    trusted builder module is loaded. No PHP/dependency is needed here.
+    """
+    source = Path(source)
+    validate_source(source)
+    try:
+        spec = importlib.util.spec_from_file_location('gitposted_trusted_package_builder', source / 'scripts/build.py')
+        if spec is None or spec.loader is None:
+            raise ValueError()
+        builder = importlib.util.module_from_spec(spec)
+        old_bytecode = sys.dont_write_bytecode
+        try:
+            sys.dont_write_bytecode = True
+            spec.loader.exec_module(builder)
+        finally:
+            sys.dont_write_bytecode = old_bytecode
+        has_manifest = (source / 'MANIFEST.sha256').exists()
+        if has_manifest:
+            builder.verify_manifest(source)
+        files = builder.collect(source, verify=has_manifest)
+        if has_manifest:
+            files['MANIFEST.sha256'] = (source / 'MANIFEST.sha256').read_bytes()
+        return files
+    except (OSError, ValueError, UnicodeError, SyntaxError):
+        raise Failure('INVALID_PACKAGE', 'Пакет неполон или содержит файлы вне публичного списка. Используйте полный проверенный release.') from None
+
+
+def persist_bundle(source, files):
+    directory(INSTALL, 0o755)
+    if Path(source).resolve() == INSTALL:
+        return
+    for name, content in sorted(files.items()):
+        destination = INSTALL / name
+        directory(destination.parent, 0o755)
+        atomic(destination, content, 0o644)
 
 
 def php_password(password):
@@ -286,7 +354,6 @@ location ~ ^/(?:webhook|max-webhook)\\.php$ {{
 location / {{ return 302 /install/; }}'''
     http = f'''server {{
 listen 80 default_server;
-listen [::]:80 default_server;
 server_name _;
 {acme}
 location / {{ {'return 302 https://' + base_host + '/install/;' if tls_ready and not installed else 'return 301 https://' + site_host + '$request_uri;' if tls_ready else 'default_type text/plain; return 503 "GitPosted: HTTPS is being configured. Return to the SSH console.\\n";'} }}
@@ -299,7 +366,6 @@ location / {{ {'return 302 https://' + base_host + '/install/;' if tls_ready and
         body = pending_app if not installed else app if host == site_host else f'location / {{ return 302 https://{site_host}$request_uri; }}'
         servers.append(f'''server {{
 listen 443 ssl {'default_server' if host == base_host else ''};
-listen [::]:443 ssl {'default_server' if host == base_host else ''};
 server_name {host};
 ssl_certificate /etc/letsencrypt/live/{cert_name(host)}/fullchain.pem;
 ssl_certificate_key /etc/letsencrypt/live/{cert_name(host)}/privkey.pem;
@@ -494,7 +560,7 @@ def reconcile_installed():
                     for step in steps if isinstance(step, dict)] if isinstance(steps, list) else []
     public.update({'installed': True, 'admin_url': marker['admin_url'], 'version': marker['version'],
                    'site_url': 'https://' + host, 'site_host': host, 'job': job})
-    for key in ('settings', 'config', 'enrollment'):
+    for key in ('settings', 'config', 'enrollment', 'job', 'public_state'):
         private.pop(key, None)
     # Remove duplicate credentials before publishing terminal public metadata.
     # Every step is idempotent if another crash interrupts this reconciliation.
@@ -542,6 +608,13 @@ def prepare_worker(release):
         safe='Не удалось установить загрузчик Telegram.')
 
 
+def prepare_resources():
+    # DATA is app-writable. All descendant creation and resource replacement
+    # must happen as that UID, including on resume after an interrupted setup.
+    run(['runuser', '-u', APP_USER, '--', '/usr/bin/python3', '-I', '-B', INSTALL / 'bin/install_resources.py'],
+        safe='Не удалось подготовить каталоги и ресурсы приложения.')
+
+
 def release_directory():
     # Bootstrap uses umask 077. Every traversed code ancestor needs an explicit
     # public execute bit before the separate application UID can read scripts.
@@ -552,13 +625,17 @@ def release_directory():
     return release
 
 
-def install(source, ip, host, resume=False, checked=False):
+def install(source, ip, host, resume=False, checked=False, package=None):
     if not checked:
         preflight(resume)
     dns_matches(host, ip)
+    files = package_files(source) if package is None else package
     print('Preflight passed. Installing GitPosted dependencies...', flush=True)
     directory(STATE, 0o700)
     save_json(STATE / 'bootstrap.json', {'installer': 'gitposted-clean-v1', 'public_ip': ip, 'host': host})
+    # The curl loader removes its temporary archive on every exit. Persist a
+    # complete root-owned resume entry point before apt/network operations.
+    persist_bundle(source, files)
     run(['apt-get', 'update', '-qq'], timeout=600, safe='Не удалось обновить список пакетов Ubuntu.')
     run(['apt-get', 'install', '-y', '-qq', 'nginx', 'mysql-server', 'php8.3-fpm', 'php8.3-cli', 'php8.3-mysql',
          'php8.3-curl', 'php8.3-mbstring', 'python3-venv', 'ca-certificates', 'curl', 'cron', 'logrotate', 'unzip'],
@@ -574,14 +651,11 @@ def install(source, ip, host, resume=False, checked=False):
     setup_gid = identity(SETUP_USER)[1]
     os.chown(STATE, 0, setup_gid)
     os.chmod(STATE, 0o750)
-    for path in (DATA, LOG, DATA / 'sessions', DATA / 'runtime', DATA / 'storage', DATA / 'tmp'):
-        directory(path, 0o700 if path.name == 'sessions' else 0o750, APP_USER)
+    for path in (DATA, LOG):
+        directory(path, 0o750, APP_USER)
     directory(STATE / 'sessions', 0o700, SETUP_USER)
     directory(CONFIG.parent, 0o770)
     os.chown(CONFIG.parent, 0, identity(APP_USER)[1])
-    directory(INSTALL, 0o755)
-    if source.resolve() != INSTALL:
-        copy_tree(source, INSTALL)
     release = release_directory()
     copy_tree(INSTALL / 'payload/src', release / 'src')
     current = APP / 'current'
@@ -592,11 +666,7 @@ def install(source, ip, host, resume=False, checked=False):
         raise Failure('UNSAFE_PATH', 'Путь current уже занят.')
     else:
         current.symlink_to(release)
-    for kind in ('assets', 'certs'):
-        destination = DATA / kind
-        copy_tree(INSTALL / 'payload/resources' / kind, destination)
-        for path in [destination, *destination.rglob('*')]:
-            os.chown(path, *identity(APP_USER))
+    prepare_resources()
     certbot_venv = STATE / 'certbot'
     directory(certbot_venv, 0o700)
     if not CERTBOT.exists():
@@ -654,12 +724,14 @@ def main():
         if args.dry_run:
             print(json.dumps({'ok': True, 'public_ip': ip, 'host': host, 'ubuntu': '24.04', 'writes': False}))
             return
+        source = Path(__file__).resolve().parents[1]
+        files = package_files(source)
         if not STATE.exists():
             directory(STATE, 0o700)
         with installer_lock():
             if args.resume and resume_ready():
                 return
-            install(Path(__file__).resolve().parents[1], ip, host, args.resume, checked=True)
+            install(source, ip, host, args.resume, checked=True, package=files)
     except Failure as error:
         print(error.code + ': ' + str(error), file=sys.stderr)
         sys.exit(1)

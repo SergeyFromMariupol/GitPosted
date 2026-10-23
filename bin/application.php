@@ -37,6 +37,7 @@ final class InstallerApplication
                 'check' => $this->check($input),
                 'register' => $this->register($input),
                 'verify' => $this->verify($input),
+                'installation_state' => $this->installationState(),
                 default => throw new InstallerApplicationFailure('INVALID_ACTION', 'Неизвестное действие установщика.'),
             };
             return ['ok' => true, 'result' => $result];
@@ -53,6 +54,26 @@ final class InstallerApplication
         $this->runtime();
         try { return PostedConfig::get(); }
         catch (Throwable) { throw new InstallerApplicationFailure('CONFIG_UNAVAILABLE', 'Защищённая конфигурация приложения недоступна.'); }
+    }
+
+    /** Read actual installed activation flags without schema or platform calls. */
+    private function installationState(): array
+    {
+        if ($this->installedConfig === null) {
+            $path = trim((string) (getenv('POSTED_CONFIG_FILE') ?: '/etc/gitposted/config.php'));
+            if (!is_dir(dirname($path)) || !is_readable(dirname($path))) {
+                throw new InstallerApplicationFailure('CONFIG_UNAVAILABLE', 'Каталог защищённой конфигурации недоступен.');
+            }
+            if (is_link($path)) {
+                throw new InstallerApplicationFailure('CONFIG_UNAVAILABLE', 'Защищённая конфигурация не должна быть ссылкой.');
+            }
+            if (!file_exists($path)) {
+                return ['configured' => false, 'telegram_enabled' => false, 'max_enabled' => false];
+            }
+        }
+        $config = $this->config();
+        return ['configured' => true, 'telegram_enabled' => ($config['telegram_bot_enabled'] ?? false) === true,
+            'max_enabled' => ($config['max_bot_enabled'] ?? false) === true];
     }
 
     private function runtime(): void
@@ -120,7 +141,7 @@ final class InstallerApplication
         if (!is_array($me)) $me = [];
         $id = (string) ($me[$platform === 'telegram' ? 'id' : 'user_id'] ?? '');
         $username = (string) ($me['username'] ?? '');
-        $format = $platform === 'telegram' ? '/^[A-Za-z0-9_]{5,32}$/D' : '/^[A-Za-z0-9_]{3,128}$/D';
+        $format = $platform === 'telegram' ? '/^[A-Za-z0-9_]{5,32}$/D' : '/^[A-Za-z0-9_]{3,60}$/D';
         if (preg_match('/^[1-9][0-9]{0,63}$/D', $id) !== 1 || preg_match($format, $username) !== 1
             || ($platform === 'telegram' && (($me['is_bot'] ?? false) !== true || explode(':', $token, 2)[0] !== $id))) {
             throw new InstallerApplicationFailure('BOT_IDENTITY_INVALID', 'API не подтвердил личность выбранного бота.');

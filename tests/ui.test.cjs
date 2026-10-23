@@ -116,7 +116,7 @@ test('hCaptcha requires complete correctly shaped credentials only when enabled'
 });
 
 test('job normalization preserves host/install types and bounds enum-driven CSS classes', () => {
-    assert.deepEqual(ui.normalizedJob(null), { id: '', type: 'install', status: 'idle', steps: [], error: '' });
+    assert.deepEqual(ui.normalizedJob(null), { id: '', type: 'install', status: 'idle', canRevise: false, steps: [], error: '' });
     const host = ui.normalizedJob({ id: 'host_1', type: 'host', status: 'complete', steps: [{ id: 'tls', title: 'HTTPS', status: 'done' }, { status: 'bad" onclick="x' }], error: { message: 'fixture error' } });
     assert.equal(host.type, 'host'); assert.equal(host.status, 'complete'); assert.equal(host.steps[1].status, 'pending'); assert.equal(host.error, 'fixture error');
 });

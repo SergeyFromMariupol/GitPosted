@@ -199,8 +199,29 @@ function adminWriteConfig(string $path, array $config, string $dataDirectory): v
         throw $exception;
     }
 }
-function adminTelegramWebhookState(PostedTelegram $telegram, array $config, bool $enabled): void {
+/** Read only: never expose a foreign webhook path or query to the browser. */
+function adminTelegramWebhookSnapshot(PostedTelegram $telegram): array {
+    $response = $telegram->call('getWebhookInfo');
+    if (!is_array($response['result'] ?? null) || !is_string($response['result']['url'] ?? null)) {
+        throw new RuntimeException('Telegram не подтвердил текущее состояние webhook.');
+    }
+    return $response['result'];
+}
+function adminTelegramWebhookIsForeign(array $snapshot, array $config): bool {
+    $url = (string) ($snapshot['url'] ?? '');
+    return $url !== '' && !hash_equals(rtrim((string) ($config['base_url'] ?? ''), '/') . '/webhook.php', $url);
+}
+function adminAssertTelegramWebhookAccess(PostedTelegram $telegram, array $config, bool $takeover = false): array {
+    $snapshot = adminTelegramWebhookSnapshot($telegram);
+    if (adminTelegramWebhookIsForeign($snapshot, $config) && !$takeover) {
+        throw new RuntimeException('У Telegram-бота подключён другой сервис. Для переноса отметьте подтверждение замены webhook в настройках бота.');
+    }
+    return $snapshot;
+}
+function adminTelegramWebhookState(PostedTelegram $telegram, array $config, bool $enabled, bool $takeover = false): void {
+    $before = adminAssertTelegramWebhookAccess($telegram, $config, $enabled && $takeover);
     if (!$enabled) {
+        if ($before['url'] === '') return;
         $telegram->call('deleteWebhook', ['drop_pending_updates' => false]);
         return;
     }
@@ -211,10 +232,24 @@ function adminTelegramWebhookState(PostedTelegram $telegram, array $config, bool
         'max_connections' => 1,
         'drop_pending_updates' => false,
     ]);
+    $confirmed = adminTelegramWebhookSnapshot($telegram);
+    $actual = $confirmed['allowed_updates'] ?? null;
+    $expected = ['message', 'channel_post', 'edited_channel_post', 'callback_query', 'my_chat_member', 'chat_member'];
+    if (!is_array($actual) || array_filter($actual, static fn(mixed $item): bool => !is_string($item)) !== []) {
+        throw new RuntimeException('Telegram не подтвердил набор событий webhook.');
+    }
+    $actual = array_values(array_unique($actual));
+    sort($actual, SORT_STRING);
+    sort($expected, SORT_STRING);
+    if (!hash_equals(rtrim((string) ($config['base_url'] ?? ''), '/') . '/webhook.php', $confirmed['url']) || $actual !== $expected) {
+        throw new RuntimeException('Telegram не подтвердил адрес и набор событий webhook.');
+    }
 }
 
 /** Persist a toggle and restore its former runtime/webhook state on failure. */
 function adminToggleTelegram(PostedTelegram $telegram, array $config, bool $enabled, callable $persist): void {
+    // Block a foreign registration before entering rollback, which also writes.
+    adminAssertTelegramWebhookAccess($telegram, $config);
     $next = $config;
     $next['telegram_bot_enabled'] = $enabled;
     try {
@@ -250,18 +285,23 @@ function adminConfigureTelegram(
     array $config,
     array $next,
     string $newBotId,
-    callable $persist
+    callable $persist,
+    bool $takeover = false
 ): string {
+    $before = adminAssertTelegramWebhookAccess($telegram, $next, $takeover);
+    $hadForeignWebhook = adminTelegramWebhookIsForeign($before, $next);
     $tokenChanged = !hash_equals((string) ($config['bot_token'] ?? ''), (string) ($next['bot_token'] ?? ''));
     $next['telegram_bot_enabled'] = true;
     $webhookAttempted = false;
     try {
         $persist($next);
         $webhookAttempted = true;
-        adminTelegramWebhookState($telegram, $next, true);
+        adminTelegramWebhookState($telegram, $next, true, $takeover);
     } catch (Throwable $exception) {
-        $restored = true;
-        if ($tokenChanged && $webhookAttempted) {
+        // A foreign secret cannot be read from Telegram. Do not delete or
+        // overwrite an uncertain registration while pretending to restore it.
+        $restored = !$hadForeignWebhook || !$webhookAttempted;
+        if ($tokenChanged && $webhookAttempted && $before['url'] === '') {
             try {
                 adminTelegramWebhookState($telegram, $next, false);
             } catch (Throwable) {
@@ -273,7 +313,7 @@ function adminConfigureTelegram(
         } catch (Throwable) {
             $restored = false;
         }
-        if ($webhookAttempted && trim((string) ($config['bot_token'] ?? '')) !== '') {
+        if ($webhookAttempted && !$hadForeignWebhook && trim((string) ($config['bot_token'] ?? '')) !== '') {
             try {
                 adminTelegramWebhookState(new PostedTelegram((string) $config['bot_token']), $config, ($config['telegram_bot_enabled'] ?? false) === true);
             } catch (Throwable) {
@@ -284,7 +324,7 @@ function adminConfigureTelegram(
             'Настройки Telegram не применены. '
                 . ($restored
                     ? 'Прежняя конфигурация и webhook сохранены.'
-                    : 'Проверьте состояние Telegram: откат конфигурации или webhook завершился не полностью.'),
+                    : 'Конфигурация возвращена; состояние webhook в Telegram требует проверки. Повторите подключение с подтверждением переноса.'),
             0,
             $exception
         );
@@ -346,10 +386,15 @@ function adminLinkAccounts(PDO $pdo, int $telegramId, string $maxId): void {
         throw $exception;
     }
 }
-function adminBotUsername(mixed $value, string $label): string {
+function adminBotUsername(mixed $value, string $label, string $platform = 'telegram'): string {
     $username = ltrim(trim((string) $value), '@');
+    $format = match ($platform) {
+        'telegram' => '/\A[A-Za-z0-9_]{5,32}\z/D',
+        'max' => '/\A[A-Za-z0-9_]{3,60}\z/D',
+        default => throw new RuntimeException('Неизвестная платформа бота.'),
+    };
     if (
-        preg_match('/\A[A-Za-z0-9_]{5,32}\z/D', $username) !== 1
+        preg_match($format, $username) !== 1
         || !str_ends_with(strtolower($username), 'bot')
     ) {
         throw new RuntimeException($label . ': укажите корректный username бота.');
@@ -358,10 +403,16 @@ function adminBotUsername(mixed $value, string $label): string {
 }
 function adminSecretInput(mixed $value, string $label, int $minimum = 32): string {
     $secret = trim((string) $value);
-    if ($secret !== '' && preg_match('/\A[A-Za-z0-9:_-]{' . $minimum . ',256}\z/D', $secret) !== 1) {
+    if ($secret !== '' && preg_match('/\A[A-Za-z0-9_-]{' . $minimum . ',256}\z/D', $secret) !== 1) {
         throw new RuntimeException($label . ': недопустимый формат.');
     }
     return $secret;
+}
+function adminMaxTokenInput(mixed $value): string {
+    if (!is_string($value) || ($value !== '' && (strlen($value) < 10 || strlen($value) > 4096 || preg_match('/[\x00-\x20\x7f]/', $value)))) {
+        throw new RuntimeException('Токен МАКС: недопустимый формат.');
+    }
+    return $value;
 }
 function scalar(PDO $pdo, string $sql): int { return (int)$pdo->query($sql)->fetchColumn(); }
 function adminWithChannelOperationLocks(
@@ -406,7 +457,25 @@ function adminMaxSubscriptionRows(array $response): array
     } else {
         throw new RuntimeException('МАКС не вернул список webhook-подписок.');
     }
-    return array_values(array_filter($rows,'is_array'));
+    foreach ($rows as $row) {
+        if (!is_array($row) || !is_string($row['url'] ?? null) || $row['url'] === '') {
+            throw new RuntimeException('МАКС вернул неподтверждённую webhook-подписку.');
+        }
+    }
+    return array_values($rows);
+}
+
+/** @return list<string> */
+function adminAssertMaxWebhookAccess(GitPostedMaxBot $app, string $url, bool $takeover = false): array
+{
+    $foreign=[];
+    foreach (adminMaxSubscriptionRows($app->subscriptions()) as $subscription) {
+        if (!hash_equals($url,$subscription['url'])) $foreign[]=$subscription['url'];
+    }
+    if ($foreign !== [] && !$takeover) {
+        throw new RuntimeException('У МАКС-бота подключён другой сервис. Для переноса отметьте подтверждение замены webhook в настройках бота.');
+    }
+    return array_values(array_unique($foreign));
 }
 
 function adminMaxSubscriptionCount(GitPostedMaxBot $app, string $url): int
@@ -455,13 +524,29 @@ function adminMaxCurrentSubscriptionCount(GitPostedMaxBot $app, string $url): in
 }
 
 /** @return array<string,mixed> */
-function adminCreateAndConfirmMaxSubscription(GitPostedMaxBot $app, string $url): array
+function adminCreateAndConfirmMaxSubscription(GitPostedMaxBot $app, string $url, bool $takeover = false): array
 {
+    adminAssertMaxWebhookAccess($app,$url,$takeover);
     $result=$app->setupWebhook($url);
     if (adminMaxCurrentSubscriptionCount($app,$url) < 1) {
         throw new RuntimeException('МАКС не подтвердил URL и полный набор событий webhook-подписки.');
     }
     return $result;
+}
+
+/** Remove only previously acknowledged foreign URLs after a working target exists. */
+function adminRemoveAcknowledgedMaxSubscriptions(GitPostedMaxBot $app, string $url, array $foreign): void
+{
+    if ($foreign === []) return;
+    if (adminMaxCurrentSubscriptionCount($app,$url) < 1) {
+        throw new RuntimeException('Новая подписка МАКС не подтверждена; прежние подписки сохранены.');
+    }
+    foreach (array_unique($foreign) as $oldUrl) {
+        if (!is_string($oldUrl) || $oldUrl === '' || hash_equals($url,$oldUrl)) {
+            throw new RuntimeException('Некорректный список подтверждённого переноса МАКС.');
+        }
+        adminRemoveAndConfirmMaxSubscription($app,$oldUrl);
+    }
 }
 
 function adminRemoveAndConfirmMaxSubscription(GitPostedMaxBot $app, string $url): void
@@ -1066,6 +1151,8 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 $hadSubscription=adminMaxSubscriptionCount($maxApp,$webhookUrl)>0;
                 $wasEnabled=(($config['max_bot_enabled'] ?? false) === true);
                 if ($enabled) {
+                    // A rejected preflight must not enter a rollback that writes.
+                    adminAssertMaxWebhookAccess($maxApp,$webhookUrl);
                     $preserveOnFailure=$hadSubscription && $wasEnabled;
                     try {
                         // POST /subscriptions is also the documented update
@@ -1205,7 +1292,8 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $cleanupWarning = adminConfigureTelegram(
                 $telegram, $config, $newConfig,
                 trim((string) (($me['result'] ?? [])['id'] ?? '')),
-                static fn(array $value) => adminWriteConfig($appConfigPath, $value, $dataDirectory)
+                static fn(array $value) => adminWriteConfig($appConfigPath, $value, $dataDirectory),
+                ($_POST['takeover_webhook'] ?? '') === '1'
             );
             go('Новый бот Telegram проверен, подключён и включён.' . $cleanupWarning, adminPage($_POST['return_page'] ?? 'telegram'));
         }
@@ -1214,14 +1302,15 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $newConfig = $config;
             $newConfig['max_bot_username'] = adminBotUsername(
                 $_POST['max_bot_username'] ?? '',
-                'Username МАКС'
+                'Username МАКС',
+                'max'
             );
             $maxApiUrl = rtrim(trim((string) ($_POST['max_api_base_url'] ?? '')), '/');
             if (!hash_equals('https://platform-api2.max.ru', $maxApiUrl)) {
                 throw new RuntimeException('Разрешён только официальный API https://platform-api2.max.ru.');
             }
             $newConfig['max_api_base_url'] = $maxApiUrl;
-            $submittedToken = adminSecretInput($_POST['max_bot_token'] ?? '', 'Токен МАКС');
+            $submittedToken = adminMaxTokenInput($_POST['max_bot_token'] ?? '');
             if ($submittedToken !== '') {
                 $newConfig['max_bot_token'] = $submittedToken;
             }
@@ -1262,6 +1351,8 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $maxWebhookUrl = $baseUrl . '/max-webhook.php';
             $maxApp = new GitPostedMaxBot($pdo, $maxApi, $newConfig);
+            $takeoverMax = ($_POST['takeover_webhook'] ?? '') === '1';
+            $acknowledgedForeignMax = adminAssertMaxWebhookAccess($maxApp,$maxWebhookUrl,$takeoverMax);
             $hasOldMax = trim((string) ($config['max_bot_token'] ?? '')) !== '';
             $oldApi = gitpostedAdminPreviousClient($config, 'max_bot_token', static fn(array $old): GitPostedMaxApi => new GitPostedMaxApi($old));
             $oldApp = $oldApi !== null ? new GitPostedMaxBot($pdo, $oldApi, $config) : null;
@@ -1291,19 +1382,20 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
             $newHadSubscription=adminMaxSubscriptionCount($maxApp,$maxWebhookUrl)>0;
-            if ($newHadSubscription && !$maxBotIdentityKnown) {
+            if ($newHadSubscription && !$maxBotIdentityKnown && !$takeoverMax) {
                 throw new RuntimeException(
                     'У нового токена уже есть webhook, а принадлежность старого токена проверить нельзя. '
                     .'Сначала удалите лишнюю подписку вручную или восстановите старый токен.'
                 );
             }
-            if ($newHadSubscription && !$sameMaxBot) {
+            if ($newHadSubscription && !$sameMaxBot && !$takeoverMax) {
                 throw new RuntimeException(
                     'У нового бота уже есть webhook на адрес GitPosted. Удалите его перед безопасным переключением.'
                 );
             }
             if (
                 $newHadSubscription
+                && $sameMaxBot
                 && !hash_equals(
                     (string)($config['max_webhook_secret'] ?? ''),
                     (string)($newConfig['max_webhook_secret'] ?? '')
@@ -1319,13 +1411,18 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 // the webhook secret; preserving it avoids a duplicate row.
                 $newConfig['max_webhook_secret']=$config['max_webhook_secret'] ?? '';
             }
+            // The preceding rotation policy may have retained the old secret.
+            // Both the API registration and persisted config must use that
+            // final value, rather than the earlier auto-generated candidate.
+            $maxApi = new GitPostedMaxApi($newConfig);
+            $maxApp = new GitPostedMaxBot($pdo,$maxApi,$newConfig);
             $createdNewSubscription=false;
             try {
                 // POST /subscriptions creates or updates the row. Even an
                 // existing URL must be refreshed so its secret/event set is
                 // confirmed by this token before the configuration switches.
                 $createdNewSubscription=!$newHadSubscription;
-                adminCreateAndConfirmMaxSubscription($maxApp,$maxWebhookUrl);
+                adminCreateAndConfirmMaxSubscription($maxApp,$maxWebhookUrl,$takeoverMax);
                 $maxApp->setCommands();
                 $newConfig['max_bot_enabled'] = true;
                 adminWriteConfig($appConfigPath,$newConfig,$dataDirectory);
@@ -1346,13 +1443,20 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw new RuntimeException(
                     'МАКС принял токен, но безопасное переключение не завершено.'
                         .($rollbackErrors===[]
-                            ? ' Старая конфигурация и webhook восстановлены.'
+                            ? ' Прежняя конфигурация восстановлена. Проверьте webhook перед повторным подключением.'
                             : ' Ошибки отката: '.implode('; ',$rollbackErrors).'.'),
                     0,
                     $exception
                 );
             }
             $cleanupWarning='';
+            try {
+                // Keep a confirmed new registration/configuration if cleanup
+                // fails; a retry can safely finish the acknowledged transfer.
+                adminRemoveAcknowledgedMaxSubscriptions($maxApp,$maxWebhookUrl,$acknowledgedForeignMax);
+            } catch (Throwable) {
+                $cleanupWarning=' Новый webhook работает; прежние подписки удалены не полностью. Повторите сохранение с подтверждением переноса.';
+            }
             if ($maxBotIdentityKnown && !$sameMaxBot && $oldApp !== null) {
                 try {
                     adminRemoveAndConfirmMaxSubscription($oldApp,$maxWebhookUrl);
@@ -1360,10 +1464,10 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                     // The confirmed new subscription is live, so retaining the
                     // old one is safer than rolling back and creating a gap.
                     error_log('GitPosted MAX old webhook cleanup: '.$cleanupException->getMessage());
-                    $cleanupWarning=' Старая подписка пока не удалена; новая уже работает.';
+                    $cleanupWarning.=' Старая подписка пока не удалена; новая уже работает.';
                 }
             } elseif (!$maxBotIdentityKnown && $hasOldMax) {
-                $cleanupWarning=' Старую подписку не удаляли: идентичность старого токена не подтверждена.';
+                $cleanupWarning.=' Старую подписку не удаляли: идентичность старого токена не подтверждена.';
             }
             go(
                 'Новый бот МАКС проверен, подключён и включён.'.$cleanupWarning,

@@ -195,7 +195,7 @@
             <div class="card job-card"><div class="progress-caption"><strong id="job-caption">Получаем этапы установки</strong><span id="job-step-count" class="small muted"></span></div><div id="job-progress" class="progress-track" role="progressbar" aria-label="Выполненные этапы"><span id="job-progress-bar"></span></div><ol id="job-steps" class="job-steps" aria-live="polite"></ol></div>
             <div id="job-error" class="notice notice--error" role="alert" hidden></div>
             <div id="job-offline" class="notice notice--warning" role="status" hidden><strong>Связь с сервером прервалась</strong><p>Установка могла продолжиться. Сначала проверим состояние уже запущенного задания.</p></div>
-            <div class="job-actions"><button id="job-refresh" class="button button--secondary" type="button">Проверить состояние</button><button id="job-retry" class="button button--primary" type="button" hidden>Повторить неуспешный этап</button></div>
+            <div class="job-actions"><button id="job-refresh" class="button button--secondary" type="button">Проверить состояние</button><button id="job-edit" class="button button--secondary" type="button" hidden>Изменить настройки</button><button id="job-retry" class="button button--primary" type="button" hidden>Повторить неуспешный этап</button></div>
         </section>
 
         <section id="complete-screen" class="center-card complete-card" aria-labelledby="complete-title" hidden>

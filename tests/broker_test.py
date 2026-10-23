@@ -119,7 +119,8 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(app.public["job"]["status"], "failed")
         self.assertEqual([step["status"] for step in app.public["job"]["steps"]], ["done", "failed", "pending"])
         self.assertEqual(p.read_json(self.state / "public.json")["job"]["error"]["code"], "INTERRUPTED")
-        self.assertEqual(app.private, self.private)
+        self.assertEqual({key: value for key, value in app.private.items() if key not in ('job', 'public_state')}, self.private)
+        self.assertEqual(app.private['job'], app.public['job'])
         self.assertNotIn("fixture-private", json.dumps(app.dispatch("status", {})))
 
     def test_retry_executes_only_uncommitted_steps_and_redacts_unexpected_failure(self):

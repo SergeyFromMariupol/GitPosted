@@ -25,7 +25,7 @@ function applicationFixture(array $config, array &$calls, array &$state, ?callab
         $calls[] = compact('platform', 'method', 'path', 'body');
         if (($state['throw'] ?? '') === $path) throw new RuntimeException('Raw private error: ' . $token);
         if ($path === 'getMe') return ['ok' => true, 'result' => ['id' => 123456, 'is_bot' => true, 'username' => 'LocalTelegramBot', 'first_name' => 'Local Telegram']];
-        if ($path === '/me') return ['user_id' => 987654, 'username' => 'LocalMaxBot', 'name' => 'Local MAX'];
+        if ($path === '/me') return ['user_id' => 987654, 'username' => $state['max_username'] ?? 'LocalMaxBot', 'name' => 'Local MAX'];
         if ($path === 'getWebhookInfo') return ['ok' => true, 'result' => $state['telegram'] ?? ['url' => '']];
         if ($path === 'setWebhook') {
             $state['telegram'] = ['url' => $body['url'], 'allowed_updates' => $body['allowed_updates']];
@@ -48,6 +48,55 @@ function applicationFixture(array $config, array &$calls, array &$state, ?callab
 }
 
 $tests = [];
+$tests['installed activation inspection returns only fixed booleans without schema or API'] = static function (): void {
+    foreach (['both', 'telegram', 'max', 'neither'] as $selection) {
+        $config = applicationConfig($selection);
+        $config['telegram_bot_enabled'] = in_array($selection, ['both', 'telegram'], true);
+        $config['max_bot_enabled'] = in_array($selection, ['both', 'max'], true);
+        $calls = []; $state = []; $schemaCalls = [];
+        $schema = static function (string $action, array $value) use (&$schemaCalls): array { $schemaCalls[] = $action; throw new RuntimeException('Inspection reached schema'); };
+        $app = applicationFixture($config, $calls, $state, $schema);
+        $result = $app->run(['action' => 'installation_state']);
+        applicationAssert($result === ['ok' => true, 'result' => ['configured' => true,
+            'telegram_enabled' => $config['telegram_bot_enabled'], 'max_enabled' => $config['max_bot_enabled']]], 'Activation inspection disclosed or misread config');
+        applicationAssert($calls === [] && $schemaCalls === [], 'Activation inspection caused external or database effects');
+    }
+};
+$tests['activation inspection distinguishes absent regular and invalid configuration files'] = static function (): void {
+    $directory = sys_get_temp_dir() . '/gitposted-inspection-' . bin2hex(random_bytes(8));
+    if (!mkdir($directory, 0700)) throw new RuntimeException('Fixture directory unavailable');
+    $path = $directory . '/config.php';
+    $previous = getenv('POSTED_CONFIG_FILE');
+    putenv('POSTED_CONFIG_FILE=' . $path);
+    try {
+        $app = new InstallerApplication(static function (): never { throw new RuntimeException('Inspection reached API'); }, static function (): never { throw new RuntimeException('Inspection reached schema'); });
+        applicationAssert($app->run(['action' => 'installation_state']) === ['ok' => true, 'result' => ['configured' => false, 'telegram_enabled' => false, 'max_enabled' => false]], 'Missing config not distinguished');
+        file_put_contents($path, '<?php return ' . var_export(['telegram_bot_enabled' => true, 'max_bot_enabled' => false], true) . ';');
+        applicationAssert($app->run(['action' => 'installation_state']) === ['ok' => true, 'result' => ['configured' => true, 'telegram_enabled' => true, 'max_enabled' => false]], 'Actual activation flags not read');
+        foreach (["<?php return 'invalid';", '<?php return [ broken syntax;'] as $contents) {
+            file_put_contents($path, $contents);
+            applicationAssert(!$app->run(['action' => 'installation_state'])['ok'], 'Invalid existing config reported inactive');
+        }
+        unlink($path);
+        if (PHP_OS_FAMILY !== 'Windows') {
+            if (!symlink($directory . '/missing-target.php', $path)) throw new RuntimeException('Fixture symlink unavailable');
+            applicationAssert(!$app->run(['action' => 'installation_state'])['ok'], 'Broken config symlink reported inactive');
+        }
+    } finally {
+        if (is_file($path) || is_link($path)) unlink($path);
+        rmdir($directory);
+        putenv($previous === false ? 'POSTED_CONFIG_FILE' : 'POSTED_CONFIG_FILE=' . $previous);
+    }
+};
+$tests['MAX identity accepts sixty characters and rejects longer nicknames before mutations'] = static function (): void {
+    foreach ([60, 61] as $length) {
+        $calls = []; $state = ['max_username' => str_repeat('a', $length - 3) . 'bot'];
+        $app = applicationFixture(applicationConfig('max'), $calls, $state);
+        $result = $app->run(['action' => 'check', 'platform' => 'max', 'token' => applicationConfig('max')['max_bot_token']]);
+        applicationAssert($result['ok'] === ($length === 60), 'Wrong MAX username boundary');
+        applicationAssert(count(array_filter($calls, static fn(array $row): bool => $row['method'] !== 'GET')) === 0, 'MAX identity validation changed API');
+    }
+};
 $tests['check is read-only and redacts foreign webhook credentials'] = static function (): void {
     $calls = []; $state = ['telegram' => ['url' => 'https://other.example/secret-token?key=private']];
     $app = applicationFixture(applicationConfig(), $calls, $state);
