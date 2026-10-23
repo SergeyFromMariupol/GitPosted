@@ -19,7 +19,7 @@ ARCHIVE = PREFIX + ".tar.gz"
 MANIFEST = "MANIFEST.sha256"
 MAX_FILE_BYTES = 100 * 1024 * 1024
 MAX_TOTAL_BYTES = 512 * 1024 * 1024
-ROOT_FILES = {"bootstrap.sh", "README.md", "AGENTS.md", "LICENSE", "LICENSE.txt", "LICENSE.md", "VERSION", ".gitignore"}
+ROOT_FILES = {"bootstrap.sh", "README.md", "AGENTS.md", "LICENSE", "LICENSE.txt", "LICENSE.md", "VERSION", ".gitignore", ".gitattributes"}
 SOURCE_EXTENSIONS = {
     "bin": {".php", ".py", ".sh"}, "lib": {".php", ".py"},
     "web": {".php", ".js", ".css", ".svg", ".png", ".webp", ".ico"},
@@ -54,7 +54,7 @@ def allowed_file(name: str) -> bool:
     if path.name.lower() in {"config.php", "config.local.php", "config.production.php", "known_hosts", "authorized_keys", "id_rsa", "id_ed25519"} \
             or any(part.startswith(".env") for part in lower_parts):
         return False
-    if any(part.startswith(".") for part in parts) and name not in {".gitignore", "payload/src/.htaccess"}:
+    if any(part.startswith(".") for part in parts) and name not in {".gitignore", ".gitattributes", "payload/src/.htaccess"}:
         return False
     if len(parts) == 1:
         return name in ROOT_FILES

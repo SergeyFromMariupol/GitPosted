@@ -19,7 +19,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-VERSION = '0.1.0-preview'
+VERSION = '0.1.0-rc.2'
 INSTALL = Path('/opt/gitposted-installer')
 APP = Path('/opt/gitposted')
 STATE = Path('/var/lib/gitposted-installer')
@@ -268,11 +268,22 @@ location ~ ^/(?:index|webhook|max-webhook|control/index|privacy/index|user-agree
  include fastcgi_params;
  fastcgi_param HTTPS on;
  fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+ fastcgi_read_timeout 1300s;
  fastcgi_pass unix:/run/php/gitposted.sock;
 }}
 location ~ \\.php(?:/|$) {{ return 404; }}
 location /control/ {{ try_files $uri $uri/ /control/index.php?$query_string; }}
 location / {{ try_files $uri $uri/ /index.php?$query_string; }}'''
+    pending_app = f'''
+root {APP}/current/src;
+location ~ ^/(?:webhook|max-webhook)\\.php$ {{
+ include fastcgi_params;
+ fastcgi_param HTTPS on;
+ fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+ fastcgi_read_timeout 1300s;
+ fastcgi_pass unix:/run/php/gitposted.sock;
+}}
+location / {{ return 302 /install/; }}'''
     http = f'''server {{
 listen 80 default_server;
 listen [::]:80 default_server;
@@ -285,7 +296,7 @@ location / {{ {'return 302 https://' + base_host + '/install/;' if tls_ready and
         return http
     servers = []
     for host in dict.fromkeys([base_host, site_host]):
-        body = app if host == site_host else f'location / {{ return 302 https://{site_host}$request_uri; }}'
+        body = pending_app if not installed else app if host == site_host else f'location / {{ return 302 https://{site_host}$request_uri; }}'
         servers.append(f'''server {{
 listen 443 ssl {'default_server' if host == base_host else ''};
 listen [::]:443 ssl {'default_server' if host == base_host else ''};
@@ -355,7 +366,7 @@ WantedBy=timers.target
 ''', 0o644)
     atomic('/etc/cron.d/gitposted', f'''SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-* * * * * gitposted POSTED_CONFIG_FILE={CONFIG} /usr/bin/php {APP}/current/src/cron.php >> {LOG}/cron.log 2>&1
+* * * * * gitposted /usr/bin/test -r {CONFIG} && POSTED_CONFIG_FILE={CONFIG} /usr/bin/php {APP}/current/src/cron.php >> {LOG}/cron.log 2>&1
 ''', 0o644)
     atomic('/etc/logrotate.d/gitposted', f'''{LOG}/*.log {{
  daily
@@ -390,9 +401,9 @@ WantedBy=timers.target
 
 
 def pools():
-    for name, user, script_root, session_dir in (
-        ('gitposted', APP_USER, f'{APP}:{CONFIG.parent}:{DATA}:{LOG}:/usr/share/zoneinfo:/tmp', DATA / 'sessions'),
-        ('gitposted-installer', SETUP_USER, f'{INSTALL}:{STATE}:/tmp', STATE / 'sessions')):
+    for name, user, script_root, session_dir, timeout in (
+        ('gitposted', APP_USER, f'{APP}:{CONFIG.parent}:{DATA}:{LOG}:/usr/share/zoneinfo:/tmp', DATA / 'sessions', 1300),
+        ('gitposted-installer', SETUP_USER, f'{INSTALL}:{STATE}:/tmp', STATE / 'sessions', 60)):
         atomic(f'/etc/php/8.3/fpm/pool.d/{name}.conf', f'''[{name}]
 user = {user}
 group = {user}
@@ -403,7 +414,7 @@ listen.mode = 0600
 pm = ondemand
 pm.max_children = 4
 pm.process_idle_timeout = 15s
-request_terminate_timeout = 60s
+request_terminate_timeout = {timeout}s
 clear_env = yes
 env[POSTED_CONFIG_FILE] = {CONFIG}
 env[POSTED_INSTALLER_STATE_DIR] = {STATE}
@@ -414,6 +425,9 @@ php_admin_flag[log_errors] = on
 php_admin_value[error_log] = {LOG / 'php.log' if user == APP_USER else STATE / 'sessions/php.log'}
 php_admin_value[upload_max_filesize] = 1M
 php_admin_value[post_max_size] = 1M
+php_admin_value[max_execution_time] = {timeout}
+php_admin_flag[opcache.validate_timestamps] = on
+php_admin_value[opcache.revalidate_freq] = 0
 php_admin_flag[expose_php] = off
 ''', 0o644)
     run(['php-fpm8.3', '-t'], safe='Конфигурация PHP-FPM не прошла проверку.')
@@ -528,6 +542,16 @@ def prepare_worker(release):
         safe='Не удалось установить загрузчик Telegram.')
 
 
+def release_directory():
+    # Bootstrap uses umask 077. Every traversed code ancestor needs an explicit
+    # public execute bit before the separate application UID can read scripts.
+    directory(APP, 0o755)
+    directory(APP / 'releases', 0o755)
+    release = APP / 'releases' / VERSION
+    directory(release, 0o755)
+    return release
+
+
 def install(source, ip, host, resume=False, checked=False):
     if not checked:
         preflight(resume)
@@ -558,8 +582,7 @@ def install(source, ip, host, resume=False, checked=False):
     directory(INSTALL, 0o755)
     if source.resolve() != INSTALL:
         copy_tree(source, INSTALL)
-    release = APP / 'releases' / VERSION
-    directory(release, 0o755)
+    release = release_directory()
     copy_tree(INSTALL / 'payload/src', release / 'src')
     current = APP / 'current'
     if current.is_symlink():
@@ -621,8 +644,11 @@ def main():
                 public = read_json(STATE / 'public.json', {})
                 print('GitPosted is already installed: ' + public['admin_url'])
             return
-        ip = public_ip(args.public_ip) if args.public_ip else detect_ip()
-        host = host_name(args.host) if args.host else ip
+        saved = read_json(STATE / 'public.json', {}) if args.resume else {}
+        if args.resume and not saved:
+            saved = read_json(STATE / 'bootstrap.json', {})
+        ip = public_ip(args.public_ip) if args.public_ip else public_ip(saved['public_ip']) if saved.get('public_ip') else detect_ip()
+        host = host_name(args.host) if args.host else host_name(saved['host']) if saved.get('host') else ip
         preflight(args.resume)
         dns_matches(host, ip)
         if args.dry_run:

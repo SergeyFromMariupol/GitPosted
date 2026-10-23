@@ -44,11 +44,22 @@ class ProvisionTests(unittest.TestCase):
             module.dns_matches('example.com','8.8.8.8')
 
     def test_nginx_has_explicit_true_https_for_fixed_php_locations(self):
-        text=module.nginx_content(self.public())
+        text=module.nginx_content(self.public(True))
         self.assertIn('fastcgi_param HTTPS on;',text)
         self.assertIn('location ~ \\.php(?:/|$) { return 404; }',text)
         self.assertNotIn('$http_x_forwarded_proto',text)
         self.assertIn(str(module.APP)+'/current/src',text)
+        self.assertIn('fastcgi_read_timeout 1300s;',text)
+        self.assertIn('fastcgi_read_timeout 50s;',text)
+
+    def test_uninstalled_https_hosts_redirect_app_paths_to_wizard_until_schema_and_config_are_ready(self):
+        text=module.nginx_content(self.public())
+        self.assertEqual(2,text.count('location / { return 302 /install/; }'))
+        self.assertEqual(2,text.count('location ~ ^/(?:webhook|max-webhook)\\.php$'))
+        self.assertIn('location = /install/api.php',text)
+        self.assertIn('location ^~ /install/assets/',text)
+        self.assertNotIn('control/index',text);self.assertNotIn('try_files',text)
+        self.assertNotIn('index index.php',text)
 
     def test_installed_nginx_closes_ui_but_keeps_exact_status_endpoint(self):
         text=module.nginx_content(self.public(True))
@@ -183,6 +194,28 @@ class ProvisionTests(unittest.TestCase):
         self.assertIn('user = gitposted-setup',writes['/etc/php/8.3/fpm/pool.d/gitposted-installer.conf'])
         self.assertIn('user = gitposted\n',writes['/etc/php/8.3/fpm/pool.d/gitposted.conf'])
         self.assertIn('clear_env = yes',writes['/etc/php/8.3/fpm/pool.d/gitposted-installer.conf'])
+        app=writes['/etc/php/8.3/fpm/pool.d/gitposted.conf'];setup=writes['/etc/php/8.3/fpm/pool.d/gitposted-installer.conf']
+        self.assertIn('request_terminate_timeout = 1300s',app);self.assertIn('php_admin_value[max_execution_time] = 1300',app)
+        self.assertIn('request_terminate_timeout = 60s',setup);self.assertIn('php_admin_value[max_execution_time] = 60',setup)
+        for pool in (app,setup):
+            self.assertIn('php_admin_flag[opcache.validate_timestamps] = on',pool)
+            self.assertIn('php_admin_value[opcache.revalidate_freq] = 0',pool)
+
+    def test_release_directory_explicitly_opens_each_code_ancestor(self):
+        with patch.object(module,'directory')as directory:
+            release=module.release_directory()
+        self.assertEqual(module.APP/'releases'/module.VERSION,release)
+        self.assertEqual([((module.APP,0o755),{}),((module.APP/'releases',0o755),{}),((release,0o755),{})],
+                         [(call.args,call.kwargs)for call in directory.call_args_list])
+
+    @unittest.skipUnless(os.name=='posix','Linux permission fixture')
+    def test_release_ancestors_remain_traversable_under_strict_bootstrap_umask(self):
+        with tempfile.TemporaryDirectory()as temporary,patch.object(module,'APP',Path(temporary)/'gitposted'):
+            old=os.umask(0o077)
+            try:release=module.release_directory()
+            finally:os.umask(old)
+            for directory in (module.APP,module.APP/'releases',release):
+                self.assertEqual(0o755,directory.stat().st_mode&0o777)
 
     def test_python_services_never_write_cache_into_immutable_package(self):
         writes={}
