@@ -101,6 +101,11 @@ class WizardCrashAudit(unittest.TestCase):
 
     def test_revise_keeps_database_credentials_schema_and_job_id_but_rotates_changed_tokens(self):
         app = self.failed_install()
+        # This case changes candidates before their first registration. Once
+        # registration starts, separate binding regressions enforce identity.
+        next(step for step in app.public['job']['steps'] if step['id'] == 'telegram')['status'] = 'pending'
+        next(step for step in app.public['job']['steps'] if step['id'] == 'max')['status'] = 'pending'
+        app.save()
         before = copy.deepcopy(app.private['config'])
         changed = fixtures.valid_settings(True, False)
         changed['telegram']['token'] = '987654:' + 'b' * 32
@@ -129,15 +134,140 @@ class WizardCrashAudit(unittest.TestCase):
         app = self.failed_install()
         before = copy.deepcopy(app.private['settings'])
         with mock.patch.object(p, 'save_json', side_effect=OSError('private unavailable')):
-            with self.assertRaises(OSError): self.revise(app, fixtures.valid_settings())
+            with self.assertRaises(OSError): self.revise(app, fixtures.valid_settings(True, True))
         self.assertEqual(app.private['settings'], before)
         self.assertEqual(app.public['job']['status'], 'failed')
 
     def test_revise_before_first_config_write_accepts_confirmed_absent_config(self):
         app = self.failed_install()
+        for step in app.public['job']['steps']:
+            if step['id'] in ('telegram', 'max'): step['status'] = 'pending'
+        app.save()
         self.assertFalse(p.CONFIG.exists())
         self.revise(app, actual={'configured': False, 'telegram_enabled': False, 'max_enabled': False})
         self.assertEqual(app.public['job']['status'], 'running')
+
+    def test_bot_identity_and_registration_intent_are_durable_before_api_mutation(self):
+        app = self.failed_install()
+        for step in app.public['job']['steps']:
+            if step['id'] in ('telegram', 'max'): step['status'] = 'pending'
+        app.save()
+        calls = []
+        def application(request, **kwargs):
+            calls.append(request['action'])
+            if request['action'] == 'check':
+                return {'identity': {'id': '123456' if request['platform'] == 'telegram' else '987654', 'username': 'LocalFixtureBot'}}
+            durable = p.read_json(self.fixture.state / 'private.json')
+            self.assertEqual(durable['bot_bindings'][request['platform']], {'id': '123456', 'started': True})
+            self.assertEqual(durable['bot_bindings']['max'], {'id': '987654', 'started': False})
+            raise p.Failure('WEBHOOK_VERIFY_FAILED', 'Simulated unknown registration result')
+        with mock.patch.object(broker, 'helper', side_effect=application), mock.patch.object(app, 'write_config') as write:
+            app.install_step('config')
+            self.assertEqual(p.read_json(self.fixture.state / 'private.json')['bot_bindings'],
+                             {'telegram': {'id': '123456', 'started': False}, 'max': {'id': '987654', 'started': False}})
+            write.assert_called_once()
+            with self.assertRaises(p.Failure): app.install_step('telegram')
+        self.assertEqual(calls, ['check', 'check', 'register'])
+        recovered = broker.Broker()
+        self.assertTrue(recovered.private['bot_bindings']['telegram']['started'])
+        self.assertNotIn('bot_bindings', recovered.dispatch('status', {}))
+
+    def test_revoked_token_can_be_replaced_by_same_bot_without_old_token_or_secret_rotation(self):
+        for platform in ('telegram', 'max'):
+            with self.subTest(platform=platform):
+                app = self.failed_install()
+                app.private['bot_bindings'] = {'telegram': {'id': '123456', 'started': True}, 'max': {'id': '987654', 'started': True}}
+                app.save()
+                secrets_before = {key: app.private['config'][key] for key in ('webhook_secret', 'max_webhook_secret')}
+                revised = fixtures.valid_settings(True, True)
+                revised[platform]['token'] = '123456:' + 'b' * 32 if platform == 'telegram' else 'replacement-max-token'
+                self.revise(app, revised)
+                checks = []
+                def application(request, **kwargs):
+                    self.assertEqual(request['action'], 'check')
+                    checks.append(request['platform'])
+                    self.assertEqual(request['token'], revised[request['platform']]['token'])
+                    return {'identity': {'id': '123456' if request['platform'] == 'telegram' else '987654', 'username': 'LocalFixtureBot'}}
+                with mock.patch.object(broker, 'helper', side_effect=application), mock.patch.object(app, 'write_config') as write:
+                    app.install_step('config')
+                self.assertEqual(checks, ['telegram', 'max'])
+                write.assert_called_once()
+                for key, value in secrets_before.items(): self.assertEqual(app.private['config'][key], value)
+                self.assertTrue(app.private['bot_bindings'][platform]['started'])
+
+    def test_changed_bot_id_fails_before_config_write_or_registration_and_preserves_binding(self):
+        for platform in ('telegram', 'max'):
+            with self.subTest(platform=platform):
+                app = self.failed_install()
+                bindings = {'telegram': {'id': '123456', 'started': True}, 'max': {'id': '987654', 'started': True}}
+                app.private['bot_bindings'] = copy.deepcopy(bindings)
+                app.save()
+                revised = fixtures.valid_settings(True, True)
+                revised[platform]['token'] = '654321:' + 'b' * 32 if platform == 'telegram' else 'other-max-bot-token'
+                self.revise(app, revised)
+                calls = []
+                def application(request, **kwargs):
+                    calls.append(request['action'])
+                    self.assertEqual(request['action'], 'check')
+                    identity = '654321' if request['platform'] == platform else ('123456' if request['platform'] == 'telegram' else '987654')
+                    return {'identity': {'id': identity, 'username': 'LocalFixtureBot'}}
+                with mock.patch.object(broker, 'helper', side_effect=application), mock.patch.object(app, 'write_config') as write:
+                    with self.assertRaises(p.Failure) as error: app.install_step('config')
+                    self.assertEqual(error.exception.code, 'REGISTERED_BOT_CHANGE_DENIED')
+                    write.assert_not_called()
+                self.assertNotIn('register', calls)
+                self.assertEqual(app.private['bot_bindings'], bindings)
+                self.assertEqual(p.read_json(self.fixture.state / 'private.json')['bot_bindings'], bindings)
+
+    def test_started_platform_cannot_be_skipped_and_rejected_revision_changes_no_checkpoint(self):
+        for platform in ('telegram', 'max'):
+            with self.subTest(platform=platform):
+                app = self.failed_install()
+                app.private['bot_bindings'] = {'telegram': {'id': '123456', 'started': True}, 'max': {'id': '987654', 'started': True}}
+                app.save()
+                before = copy.deepcopy(app.private)
+                revised = fixtures.valid_settings(True, True); revised[platform]['enabled'] = False
+                with self.assertRaises(p.Failure) as error: self.revise(app, revised)
+                self.assertEqual(error.exception.code, 'REGISTERED_BOT_CHANGE_DENIED')
+                self.assertEqual(app.private, before)
+                self.assertEqual(p.read_json(self.fixture.state / 'private.json'), before)
+
+    def test_legacy_telegram_binding_recovers_from_token_prefix_and_preserves_secret(self):
+        app = self.failed_install()
+        revised = fixtures.valid_settings(True, True)
+        revised['telegram']['token'] = '123456:' + 'b' * 32
+        before = app.private['config']['webhook_secret']
+        self.revise(app, revised)
+        self.assertEqual(app.private['bot_bindings']['telegram'], {'id': '123456', 'started': True})
+        self.assertEqual(app.private['config']['webhook_secret'], before)
+
+    def test_legacy_max_changed_token_is_denied_until_unchanged_identity_is_anchored(self):
+        app = self.failed_install()
+        changed = fixtures.valid_settings(True, True); changed['max']['token'] = 'replacement-max-token'
+        before = copy.deepcopy(app.private)
+        with self.assertRaises(p.Failure) as error: self.revise(app, changed)
+        self.assertEqual(error.exception.code, 'REGISTERED_BOT_CHANGE_DENIED')
+        self.assertEqual(app.private, before)
+        self.revise(app, fixtures.valid_settings(True, True))
+        with mock.patch.object(broker, 'helper', side_effect=lambda request, **kwargs:
+                {'identity': {'id': '123456' if request['platform'] == 'telegram' else '987654', 'username': 'LocalFixtureBot'}}), mock.patch.object(app, 'write_config'):
+            app.install_step('config')
+        self.assertEqual(p.read_json(self.fixture.state / 'private.json')['bot_bindings']['max'], {'id': '987654', 'started': True})
+
+    def test_final_commit_and_terminal_recovery_remove_private_bot_bindings(self):
+        for recovery in (False, True):
+            with self.subTest(recovery=recovery):
+                app = self.fixture.finish_fixture()
+                app.private['bot_bindings'] = {'telegram': {'id': '123456', 'started': True}}
+                app.save()
+                with mock.patch.object(p, 'configure_nginx'), mock.patch.object(p, 'run', return_value=b''), mock.patch.object(broker.threading, 'Timer'):
+                    if recovery:
+                        self.fixture.save_json(self.fixture.state / 'installed.json', {'installed_at': 123, 'version': 'fixture', 'admin_url': 'https://local.example/control/'})
+                        p.reconcile_installed()
+                    else:
+                        self.fixture.execute(app)
+                self.assertNotIn('bot_bindings', p.read_json(self.fixture.state / 'private.json'))
+                (self.fixture.state / 'installed.json').unlink(missing_ok=True)
 
     def test_revise_denied_after_activation_ever_started_or_actual_flag_is_active(self):
         for cause in ('running', 'failed', 'done', 'private-active', 'actual-active', 'malformed-state', 'marker'):

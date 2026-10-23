@@ -715,8 +715,11 @@ final class PostedPublishAuthorizationException extends RuntimeException
 
 final class PostedTelegram
 {
-    public function __construct(private readonly string $token)
+    public function __construct(private readonly string $token, private readonly int $requestTimeoutSeconds = 30)
     {
+        if ($this->requestTimeoutSeconds < 1 || $this->requestTimeoutSeconds > 30) {
+            throw new InvalidArgumentException('Telegram API timeout must be between one and thirty seconds.');
+        }
     }
 
     public function call(string $method, array $payload = []): array
@@ -738,8 +741,8 @@ final class PostedTelegram
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_MAXREDIRS => 0,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT => 30,
+            CURLOPT_CONNECTTIMEOUT => min(10, $this->requestTimeoutSeconds),
+            CURLOPT_TIMEOUT => $this->requestTimeoutSeconds,
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $body,
             CURLOPT_HTTPHEADER => ['Content-Type: application/json; charset=utf-8', 'Accept: application/json'],
@@ -802,7 +805,7 @@ final class PostedTelegram
     {
         $url='https://api.telegram.org/bot'.rawurlencode($this->token).'/'.$method;
         foreach($payload as $key=>$value) if(is_array($value)) $payload[$key]=json_encode($value,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
-        $ch=curl_init($url);curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_CONNECTTIMEOUT=>10,CURLOPT_TIMEOUT=>30,CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$payload,CURLOPT_HTTPHEADER=>['Accept: application/json'],CURLOPT_USERAGENT=>'GitPosted Bot']);
+        $ch=curl_init($url);curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_FOLLOWLOCATION=>false,CURLOPT_CONNECTTIMEOUT=>min(10,$this->requestTimeoutSeconds),CURLOPT_TIMEOUT=>$this->requestTimeoutSeconds,CURLOPT_POST=>true,CURLOPT_POSTFIELDS=>$payload,CURLOPT_HTTPHEADER=>['Accept: application/json'],CURLOPT_USERAGENT=>'GitPosted Bot']);
         $raw=curl_exec($ch);$status=(int)curl_getinfo($ch,CURLINFO_RESPONSE_CODE);$error=curl_error($ch);curl_close($ch);
         if(!is_string($raw)||$raw===''){
             throw new PostedTelegramRequestException(

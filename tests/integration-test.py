@@ -152,7 +152,7 @@ class Session:
         raise AssertionError('Fixture job timed out')
 
 
-def run_case(name, tg, mx, repair=False):
+def run_case(name, tg, mx, repair=False, foreign=False):
     root=Path(tempfile.mkdtemp(prefix='gitposted-integration.',dir='/var/tmp'));root.chmod(0o755)
     suffix=secrets.token_hex(6);dbname='GitPostedCheck_'+suffix;dbuser='gpcheck_'+suffix
     assert sql("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='"+dbname+"'")=='0'
@@ -171,7 +171,9 @@ def run_case(name, tg, mx, repair=False):
         data=root/'data';data.mkdir(mode=0o750);os.chown(data,pwd.getpwnam('gitposted').pw_uid,pwd.getpwnam('gitposted').pw_gid)
         configdir=root/'config';configdir.mkdir(mode=0o770);os.chown(configdir,0,pwd.getpwnam('gitposted').pw_gid)
         config=configdir/'config.php'
-        write(data/'fake-api.json','{}',0o600,'gitposted')
+        initial_api = {'telegram': {'url': BASE+'/webhook.php?key=fixture-private-url'},
+                       'max': [{'url': BASE+'/max-webhook.php?key=fixture-private-url'}]} if foreign else {}
+        write(data/'fake-api.json',json.dumps(initial_api),0o600,'gitposted')
         app=bundle/'bin/application.php';app.rename(bundle/'bin/application-library.php');write(app,TRANSPORT)
         api=bundle/'web/api.php';code=api.read_text()
         assert code.count('new WizardFiles()')==1 and code.count('new WizardBroker()')==1
@@ -207,7 +209,10 @@ def run_case(name, tg, mx, repair=False):
         for platform in ('telegram','max'):
             if value[platform]['enabled']:
                 result=session.successful('check_bot',{'platform':platform,'token':value[platform]['token']},csrf)
-                assert result['identity']['username'] and result['existing_urls']==[]
+                assert result['identity']['username']
+                assert result['existing_urls']==([BASE+'/[configured-webhook]'] if foreign else [])
+                assert 'fixture-private-url' not in json.dumps(result)
+                value[platform]['takeover'] = foreign
         if repair:
             fake=json.loads((data/'fake-api.json').read_text());fake['reject_token_hash']=hashlib.sha256(value['telegram']['token'].encode()).hexdigest()
             write(data/'fake-api.json',json.dumps(fake),0o600,'gitposted')
@@ -227,7 +232,7 @@ def run_case(name, tg, mx, repair=False):
         if not tg:assert not any(x['platform']=='telegram' for x in fake.get('calls',[]))
         if not mx:assert not any(x['platform']=='max' for x in fake.get('calls',[]))
         status,body=session.call('start',{'settings':value},csrf);assert status==410 and body['error']['code']=='INSTALLED'
-        final_private=json.loads((state/'private.json').read_text());assert not any(x in final_private for x in ('settings','config','enrollment'))
+        final_private=json.loads((state/'private.json').read_text());assert not any(x in final_private for x in ('settings','config','enrollment','bot_bindings'))
         print('PASS real HTTP/Unix/MySQL:',name,flush=True)
     finally:
         # Kill our isolated process group, including runuser's PHP child.
@@ -251,7 +256,8 @@ def main():
     if os.geteuid()!=0:raise SystemExit('Run on a dedicated test host as root.')
     for case,tg,mx in [('none',False,False),('telegram',True,False),('max',False,True),('both',True,True)]:run_case(case,tg,mx)
     run_case('revoked-token-revise',True,False,repair=True)
-    print('Integration acceptance passed: 5 isolated cases; platform transport captured; no publications.')
+    run_case('redacted-own-origin-consent',True,True,foreign=True)
+    print('Integration acceptance passed: 6 isolated cases; platform transport captured; no publications.')
 
 
 if __name__=='__main__':main()

@@ -173,8 +173,9 @@ class BrokerTests(unittest.TestCase):
 
     def test_helper_preserves_safe_error_envelope_from_nonzero_php_without_stderr_leak(self):
         response = json.dumps({"ok": False, "error": {"code": "TAKEOVER_REQUIRED", "message": "unsafe fixture-private"}}).encode()
-        completed = subprocess.CompletedProcess([], 1, stdout=response, stderr=b"raw fixture-private stderr")
-        with mock.patch.object(subprocess, "run", return_value=completed):
+        child = types.SimpleNamespace(returncode=1, stdin=None, stdout=None, stderr=None,
+                                      communicate=lambda **_: (response, b"raw fixture-private stderr"), poll=lambda:1)
+        with mock.patch.object(subprocess, "Popen", return_value=child):
             with self.assertRaises(p.Failure) as error:
                 broker.helper({"action": "register", "platform": "max"})
         self.assertEqual(error.exception.code, "TAKEOVER_REQUIRED", "Valid child error code was discarded before JSON parsing")
@@ -209,7 +210,7 @@ class BrokerTests(unittest.TestCase):
                     return b"0" if "-NBe" in argv else b""
                 def application(value, **kwargs):
                     calls.append(value)
-                    if value["action"] == "check": return {"identity": {"username": "LocalTelegramBot" if value["platform"] == "telegram" else "LocalMaxBot"}}
+                    if value["action"] == "check": return {"identity": {"id": "123456" if value["platform"] == "telegram" else "987654", "username": "LocalTelegramBot" if value["platform"] == "telegram" else "LocalMaxBot"}}
                     self.assertTrue(writes)
                     self.assertIs(writes[-1]["telegram_bot_enabled"], False)
                     self.assertIs(writes[-1]["max_bot_enabled"], False)

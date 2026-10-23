@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import os
@@ -154,6 +155,96 @@ class ProvisionAuditTests(unittest.TestCase):
         with patch.object(p, 'directory'), patch.object(p, 'atomic', side_effect=lambda path, value, *_: writes.update({path:value})):
             p.persist_bundle(Path('/fixture/source'), files)
         self.assertEqual({p.INSTALL / name:value for name,value in files.items()}, writes)
+
+    @unittest.skipUnless(os.name == 'posix', 'Linux umask and file modes')
+    def test_persisted_multilevel_bundle_remains_app_readable_under_private_umask(self):
+        files = {'bootstrap.sh': b'fixture bootstrap\n',
+                 'bin/helper.py': b'fixture helper\n',
+                 'payload/resources/assets/schedule.jpg': b'fixture resource bytes\x00\xff',
+                 'payload/src/control/panel.php': b'fixture nested PHP\n'}
+        files['MANIFEST.sha256'] = ''.join(hashlib.sha256(value).hexdigest() + '  ' + name + '\n'
+                                          for name, value in sorted(files.items())).encode()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); root.chmod(0o755)
+            public_parent = root / 'public-parent'; public_parent.mkdir(mode=0o751)
+            public_parent.chmod(0o751)
+            target = public_parent / 'installer'
+            private = root / 'private-state'; private.mkdir(mode=0o700)
+            marker = private / 'marker'; marker.write_bytes(b'private fixture'); marker.chmod(0o600)
+            previous_umask = os.umask(0o077)
+            try:
+                # Non-root developer runs cannot chown to root; preserve the
+                # real filesystem writes/modes while avoiding that unrelated requirement.
+                ownership = contextlib.nullcontext() if os.geteuid() == 0 else patch.object(p.os, 'fchown')
+                with patch.object(p, 'INSTALL', target), ownership:
+                    p.persist_bundle(root / 'source', files)
+            finally:
+                os.umask(previous_umask)
+            self.assertEqual(0o751, stat.S_IMODE(public_parent.stat().st_mode))
+            self.assertEqual(0o700, stat.S_IMODE(private.stat().st_mode))
+            self.assertEqual(0o600, stat.S_IMODE(marker.stat().st_mode))
+            for path in [target, *(item for item in target.rglob('*') if item.is_dir())]:
+                self.assertEqual(0o755, stat.S_IMODE(path.stat().st_mode), str(path.relative_to(target)))
+            for name, value in files.items():
+                path = target / name
+                self.assertEqual(value, path.read_bytes())
+                self.assertEqual(0o644, stat.S_IMODE(path.stat().st_mode))
+            # --resume may run from the persisted bundle itself. Repair only
+            # its public ancestors without rewriting the files being executed.
+            (target / 'payload').chmod(0o700)
+            (target / 'payload/resources').chmod(0o700)
+            with patch.object(p, 'INSTALL', target), patch.object(p, 'atomic') as rewrite:
+                p.persist_bundle(target, files)
+                rewrite.assert_not_called()
+            for path in [target, *(item for item in target.rglob('*') if item.is_dir())]:
+                self.assertEqual(0o755, stat.S_IMODE(path.stat().st_mode))
+            self.assertEqual(0o751, stat.S_IMODE(public_parent.stat().st_mode))
+            self.assertEqual(0o700, stat.S_IMODE(private.stat().st_mode))
+            if os.geteuid() == 0:
+                try:
+                    app = p.pwd.getpwnam(p.APP_USER)
+                except KeyError:
+                    app = p.pwd.getpwnam('nobody')
+                reader, writer = os.pipe()
+                child = os.fork()
+                if child == 0:
+                    os.close(reader)
+                    try:
+                        os.setgroups([]); os.setgid(app.pw_gid); os.setuid(app.pw_uid)
+                        valid = all((target / name).read_bytes() == value for name, value in files.items())
+                        os.write(writer, b'1' if valid else b'0'); os._exit(0 if valid else 1)
+                    except BaseException:
+                        os.write(writer, b'0'); os._exit(1)
+                os.close(writer)
+                try:
+                    self.assertEqual(b'1', os.read(reader, 1), 'Application UID could not read the persisted package')
+                finally:
+                    os.close(reader)
+                    _, status = os.waitpid(child, 0)
+                self.assertTrue(os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0)
+
+    def test_persist_bundle_rejects_noncanonical_or_escaping_members_before_writes(self):
+        for name in ('../outside', '/outside', './bootstrap.sh', 'scripts/../outside',
+                     'scripts//helper.py', 'scripts\\helper.py', '', 'scripts/./helper.py'):
+            with self.subTest(name=name), patch.object(p, 'directory') as directory, \
+                 patch.object(p, 'atomic') as atomic, self.assertRaises(p.Failure) as error:
+                p.persist_bundle(Path('/fixture/source'), {'bootstrap.sh': b'valid', name: b'invalid'})
+            self.assertEqual('UNSAFE_PACKAGE', error.exception.code)
+            directory.assert_not_called(); atomic.assert_not_called()
+
+    @unittest.skipUnless(os.name == 'posix', 'Linux intermediate symlink protection')
+    def test_persist_bundle_refuses_linked_ancestor_without_chmod_or_writes_outside_install(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); target = root / 'installer'; target.mkdir()
+            outside = root / 'outside'; outside.mkdir(mode=0o700)
+            marker = outside / 'resource'; marker.write_bytes(b'preserve fixture')
+            (target / 'payload').symlink_to(outside, target_is_directory=True)
+            with patch.object(p, 'INSTALL', target), self.assertRaises(p.Failure) as error:
+                p.persist_bundle(root / 'source', {'payload/resources/assets/file': b'public fixture'})
+            self.assertEqual('UNSAFE_PATH', error.exception.code)
+            self.assertEqual(0o700, stat.S_IMODE(outside.stat().st_mode))
+            self.assertEqual([marker], list(outside.iterdir()))
+            self.assertEqual(b'preserve fixture', marker.read_bytes())
 
     def test_resource_helper_refuses_root_before_any_directory_or_file_change(self):
         with patch.object(resources.os, 'getuid', return_value=0, create=True), \

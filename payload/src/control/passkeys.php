@@ -20,9 +20,18 @@ function reply(array $data, int $status = 200): never
     exit;
 }
 
+final class GitPostedPasskeyRequestFailure extends RuntimeException
+{
+    public function __construct(string $message, public readonly int $status = 400)
+    {
+        parent::__construct($message);
+    }
+}
+
 function fail(string $message, int $status = 400): never
 {
-    reply(['ok' => false, 'error' => $message], $status);
+    // Unwind database transactions and advisory locks before replying.
+    throw new GitPostedPasskeyRequestFailure($message, $status);
 }
 
 function b64uEncode(string $value): string
@@ -175,6 +184,75 @@ function authorize(): void
     unset($_SESSION['login_csrf']);
 }
 
+/** Lock the fresh credential until its signature and counter are committed. */
+function verifyAndUsePasskey(PDO $pdo, array $input): void
+{
+    if (!$pdo->beginTransaction()) throw new RuntimeException('Passkey transaction unavailable.');
+    try {
+        $credential = (string) ($input['credential_id'] ?? '');
+        $stmt = $pdo->prepare('SELECT * FROM posted_admin_passkeys WHERE credential_id=:credential LIMIT 1 FOR UPDATE');
+        $stmt->execute(['credential' => $credential]);
+        $key = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$key) fail('Ключ доступа не найден.', 404);
+        $response = is_array($input['response'] ?? null) ? $input['response'] : [];
+        $clientRaw = verifyClient($response, 'webauthn.get', takeChallenge('auth'));
+        [$authRaw, $counter] = parseAuthenticator((string) ($response['authenticatorData'] ?? ''));
+        $algorithm = (int) $key['algorithm'];
+        $opensslAlgorithm = $algorithm === -7 ? OPENSSL_ALGO_SHA256 : ($algorithm === -257 ? OPENSSL_ALGO_SHA256 : null);
+        if ($opensslAlgorithm === null
+            || openssl_verify(
+                $authRaw . hash('sha256', $clientRaw, true),
+                b64uDecode($response['signature'] ?? ''),
+                pem(base64_decode((string) $key['public_key_spki'], true) ?: ''),
+                $opensslAlgorithm
+            ) !== 1
+        ) fail('Подпись ключа недействительна.', 401);
+        if ((int) $key['sign_count'] > 0 && $counter > 0 && $counter <= (int) $key['sign_count']) fail('Счётчик ключа недействителен.', 401);
+        $stmt = $pdo->prepare('UPDATE posted_admin_passkeys SET sign_count=:counter,last_used_at=NOW() WHERE id=:id');
+        $stmt->execute(['counter' => max($counter, (int) $key['sign_count']), 'id' => $key['id']]);
+        if (!$pdo->commit()) throw new RuntimeException('Passkey transaction was not committed.');
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $error;
+    }
+}
+
+/** Serialize the advertised key limit across independent admin sessions. */
+function registerPasskey(PDO $pdo, array $input): void
+{
+    $lockName = 'gitposted-passkey-register:' . substr(hash('sha256', (string) $pdo->query('SELECT DATABASE()')->fetchColumn()), 0, 32);
+    $lock = $pdo->prepare('SELECT GET_LOCK(:name,10)');
+    $lock->execute(['name' => $lockName]);
+    if ((int) $lock->fetchColumn() !== 1) fail('Ключи доступа уже изменяются в другом окне. Повторите действие.', 409);
+    try {
+        if ((int) $pdo->query('SELECT COUNT(*) FROM posted_admin_passkeys')->fetchColumn() >= 3) fail('Можно добавить не более трёх ключей доступа.');
+        $response = is_array($input['response'] ?? null) ? $input['response'] : [];
+        verifyClient($response, 'webauthn.create', takeChallenge('register'));
+        [, $counter] = parseAuthenticator((string) ($response['authenticatorData'] ?? ''));
+        $algorithm = (int) ($response['publicKeyAlgorithm'] ?? 0);
+        if (!in_array($algorithm, [-7, -257], true)) fail('Этот тип ключа не поддерживается.');
+        $spki = b64uDecode($response['publicKey'] ?? '');
+        if (openssl_pkey_get_public(pem($spki)) === false) fail('Открытый ключ устройства недействителен.');
+        $count = (int) $pdo->query('SELECT COUNT(*) FROM posted_admin_passkeys')->fetchColumn();
+        $name = $count === 0 ? 'Developer' : 'Developer ' . ($count + 1);
+        $stmt = $pdo->prepare(
+            'INSERT INTO posted_admin_passkeys(credential_id,name,public_key_spki,algorithm,sign_count,transports)
+             VALUES(:credential,:name,:public_key,:algorithm,:counter,:transports)'
+        );
+        $stmt->execute([
+            'credential' => (string) ($input['credential_id'] ?? ''),
+            'name' => $name,
+            'public_key' => base64_encode($spki),
+            'algorithm' => $algorithm,
+            'counter' => $counter,
+            'transports' => json_encode(array_values((array) ($response['transports'] ?? [])), JSON_UNESCAPED_SLASHES),
+        ]);
+    } finally {
+        $release = $pdo->prepare('SELECT RELEASE_LOCK(:name)');
+        $release->execute(['name' => $lockName]);
+    }
+}
+
 try {
     $pdo = PostedDb::pdo(PostedConfig::get());
     ensureTable($pdo);
@@ -209,28 +287,7 @@ try {
     }
 
     if ($path === 'auth/verify' && $method === 'POST') {
-        $input = body();
-        $credential = (string) ($input['credential_id'] ?? '');
-        $stmt = $pdo->prepare('SELECT * FROM posted_admin_passkeys WHERE credential_id=:credential LIMIT 1');
-        $stmt->execute(['credential' => $credential]);
-        $key = $stmt->fetch(PDO::FETCH_ASSOC);
-        if (!$key) fail('Ключ доступа не найден.', 404);
-        $response = is_array($input['response'] ?? null) ? $input['response'] : [];
-        $clientRaw = verifyClient($response, 'webauthn.get', takeChallenge('auth'));
-        [$authRaw, $counter] = parseAuthenticator((string) ($response['authenticatorData'] ?? ''));
-        $algorithm = (int) $key['algorithm'];
-        $opensslAlgorithm = $algorithm === -7 ? OPENSSL_ALGO_SHA256 : ($algorithm === -257 ? OPENSSL_ALGO_SHA256 : null);
-        if ($opensslAlgorithm === null
-            || openssl_verify(
-                $authRaw . hash('sha256', $clientRaw, true),
-                b64uDecode($response['signature'] ?? ''),
-                pem(base64_decode((string) $key['public_key_spki'], true) ?: ''),
-                $opensslAlgorithm
-            ) !== 1
-        ) fail('Подпись ключа недействительна.', 401);
-        if ((int) $key['sign_count'] > 0 && $counter > 0 && $counter <= (int) $key['sign_count']) fail('Счётчик ключа недействителен.', 401);
-        $stmt = $pdo->prepare('UPDATE posted_admin_passkeys SET sign_count=:counter,last_used_at=NOW() WHERE id=:id');
-        $stmt->execute(['counter' => max($counter, (int) $key['sign_count']), 'id' => $key['id']]);
+        verifyAndUsePasskey($pdo, body());
         authorize();
         reply(['ok' => true, 'redirect' => '/control/?page=overview']);
     }
@@ -267,29 +324,7 @@ try {
     }
 
     if ($path === 'register/verify' && $method === 'POST') {
-        $input = body();
-        if ((int) $pdo->query('SELECT COUNT(*) FROM posted_admin_passkeys')->fetchColumn() >= 3) fail('Можно добавить не более трёх ключей доступа.');
-        $response = is_array($input['response'] ?? null) ? $input['response'] : [];
-        verifyClient($response, 'webauthn.create', takeChallenge('register'));
-        [, $counter] = parseAuthenticator((string) ($response['authenticatorData'] ?? ''));
-        $algorithm = (int) ($response['publicKeyAlgorithm'] ?? 0);
-        if (!in_array($algorithm, [-7, -257], true)) fail('Этот тип ключа не поддерживается.');
-        $spki = b64uDecode($response['publicKey'] ?? '');
-        if (openssl_pkey_get_public(pem($spki)) === false) fail('Открытый ключ устройства недействителен.');
-        $count = (int) $pdo->query('SELECT COUNT(*) FROM posted_admin_passkeys')->fetchColumn();
-        $name = $count === 0 ? 'Developer' : 'Developer ' . ($count + 1);
-        $stmt = $pdo->prepare(
-            'INSERT INTO posted_admin_passkeys(credential_id,name,public_key_spki,algorithm,sign_count,transports)
-             VALUES(:credential,:name,:public_key,:algorithm,:counter,:transports)'
-        );
-        $stmt->execute([
-            'credential' => (string) ($input['credential_id'] ?? ''),
-            'name' => $name,
-            'public_key' => base64_encode($spki),
-            'algorithm' => $algorithm,
-            'counter' => $counter,
-            'transports' => json_encode(array_values((array) ($response['transports'] ?? [])), JSON_UNESCAPED_SLASHES),
-        ]);
+        registerPasskey($pdo, body());
         reply(['ok' => true, 'passkeys' => listKeys($pdo)]);
     }
 
@@ -300,6 +335,8 @@ try {
     }
 
     fail('Маршрут не найден.', 404);
+} catch (GitPostedPasskeyRequestFailure $error) {
+    reply(['ok' => false, 'error' => $error->getMessage()], $error->status);
 } catch (Throwable $error) {
-    fail('Операция с ключом доступа не выполнена.', 500);
+    reply(['ok' => false, 'error' => 'Операция с ключом доступа не выполнена.'], 500);
 }

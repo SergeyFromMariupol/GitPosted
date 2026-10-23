@@ -23,7 +23,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-VERSION = '0.1.0-rc.4'
+VERSION = '0.1.0-rc.5'
 INSTALL = Path('/opt/gitposted-installer')
 APP = Path('/opt/gitposted')
 STATE = Path('/var/lib/gitposted-installer')
@@ -273,13 +273,30 @@ def package_files(source):
 
 
 def persist_bundle(source, files):
-    directory(INSTALL, 0o755)
-    if Path(source).resolve() == INSTALL:
-        return
+    destinations = []
     for name, content in sorted(files.items()):
-        destination = INSTALL / name
-        directory(destination.parent, 0o755)
-        atomic(destination, content, 0o644)
+        if (not isinstance(name, str) or not name or '\\' in name or '\x00' in name
+                or any(part in ('', '.', '..') for part in name.split('/'))):
+            raise Failure('UNSAFE_PACKAGE', 'Пакет содержит неподходящий относительный путь.')
+        relative = Path(*name.split('/'))
+        destination = INSTALL / relative
+        if relative.is_absolute() or relative.drive or not destination.is_relative_to(INSTALL):
+            raise Failure('UNSAFE_PACKAGE', 'Файл пакета находится вне каталога установщика.')
+        destinations.append((relative, destination, content))
+    directory(INSTALL, 0o755)
+    same_source = Path(source).resolve() == INSTALL
+    for relative, destination, content in destinations:
+        # mkdir(parents=True) applies umask to implicit intermediate folders.
+        # Every public bundle ancestor must be traversable by the app UID;
+        # create/check each one explicitly, never chmod above INSTALL.
+        parent = INSTALL
+        for part in relative.parts[:-1]:
+            parent = parent / part
+            directory(parent, 0o755)
+        if destination.is_symlink():
+            raise Failure('UNSAFE_PATH', 'Файл установщика не должен быть символической ссылкой.')
+        if not same_source:
+            atomic(destination, content, 0o644)
 
 
 def sync_directory(path):
@@ -628,7 +645,7 @@ def reconcile_installed():
                     for step in steps if isinstance(step, dict)] if isinstance(steps, list) else []
     public.update({'installed': True, 'admin_url': marker['admin_url'], 'version': marker['version'],
                    'site_url': 'https://' + host, 'site_host': host, 'job': job})
-    for key in ('settings', 'config', 'enrollment', 'job', 'public_state'):
+    for key in ('settings', 'config', 'enrollment', 'job', 'public_state', 'bot_bindings'):
         private.pop(key, None)
     # Remove duplicate credentials before publishing terminal public metadata.
     # Every step is idempotent if another crash interrupts this reconciliation.

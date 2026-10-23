@@ -106,18 +106,20 @@ final class InstallerApplication
         return $this->token($platform, $config[$platform === 'telegram' ? 'bot_token' : 'max_bot_token'] ?? null);
     }
 
-    private function api(string $platform, string $token, string $method, string $path, array $body = [], array $config = []): array
+    private function api(string $platform, string $token, string $method, string $path, array $body = [], array $config = [], int $requestAttempts = 4): array
     {
         try {
             if ($this->transport !== null) {
-                $value = ($this->transport)($platform, $token, $method, $path, $body);
+                $value = ($this->transport)($platform, $token, $method, $path, $body, $requestAttempts);
             } else {
                 $this->runtime();
                 if ($platform === 'telegram') {
-                    $value = (new PostedTelegram($token))->call($path, $body);
+                    // Interactive check has two reads and a 35-second parent
+                    // deadline; ordinary runtime/background calls retain 30s.
+                    $value = (new PostedTelegram($token, $requestAttempts === 1 ? 15 : 30))->call($path, $body);
                 } else {
                     $ca = (string) ($config['max_ca_file'] ?? dirname(__DIR__) . '/payload/resources/certs/russiantrustedca.pem');
-                    $api = new GitPostedMaxApi(['max_bot_token' => $token, 'max_api_base_url' => 'https://platform-api2.max.ru', 'max_ca_file' => $ca]);
+                    $api = new GitPostedMaxApi(['max_bot_token' => $token, 'max_api_base_url' => 'https://platform-api2.max.ru', 'max_ca_file' => $ca], $requestAttempts);
                     $value = match ([$method, $path]) {
                         ['GET', '/me'] => $api->me(),
                         ['GET', '/subscriptions'] => $api->subscriptions(),
@@ -137,9 +139,9 @@ final class InstallerApplication
         }
     }
 
-    private function identity(string $platform, string $token, array $config): array
+    private function identity(string $platform, string $token, array $config, int $requestAttempts = 4): array
     {
-        $response = $this->api($platform, $token, $platform === 'telegram' ? 'POST' : 'GET', $platform === 'telegram' ? 'getMe' : '/me', [], $config);
+        $response = $this->api($platform, $token, $platform === 'telegram' ? 'POST' : 'GET', $platform === 'telegram' ? 'getMe' : '/me', [], $config, $requestAttempts);
         $me = $platform === 'telegram' ? ($response['result'] ?? null) : $response;
         if (!is_array($me)) $me = [];
         $id = (string) ($me[$platform === 'telegram' ? 'id' : 'user_id'] ?? '');
@@ -155,9 +157,9 @@ final class InstallerApplication
     }
 
     /** Raw URLs remain private to this process; never return the API response. */
-    private function subscriptions(string $platform, string $token, array $config): array
+    private function subscriptions(string $platform, string $token, array $config, int $requestAttempts = 4): array
     {
-        $response = $this->api($platform, $token, $platform === 'telegram' ? 'POST' : 'GET', $platform === 'telegram' ? 'getWebhookInfo' : '/subscriptions', [], $config);
+        $response = $this->api($platform, $token, $platform === 'telegram' ? 'POST' : 'GET', $platform === 'telegram' ? 'getWebhookInfo' : '/subscriptions', [], $config, $requestAttempts);
         if ($platform === 'telegram') {
             if (!is_array($response['result'] ?? null) || !is_string($response['result']['url'] ?? null)) {
                 throw new InstallerApplicationFailure('WEBHOOK_RESPONSE_INVALID', 'API не вернул состояние webhook.');
@@ -177,11 +179,20 @@ final class InstallerApplication
         $urls = [];
         foreach ($rows as $row) {
             $parts = parse_url($row['url']);
-            if (!is_array($parts) || !isset($parts['host']) || !in_array($parts['scheme'] ?? '', ['https', 'http'], true)) continue;
+            $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+            if (!is_array($parts) || !isset($parts['host']) || !in_array($scheme, ['https', 'http'], true)
+                || filter_var($row['url'], FILTER_VALIDATE_URL) === false) {
+                throw new InstallerApplicationFailure('WEBHOOK_RESPONSE_INVALID', 'API не подтвердил адрес существующего webhook.');
+            }
             // Foreign webhook paths or query strings can contain other services' secrets.
             $path = (string) ($parts['path'] ?? '/');
-            if (!in_array($path, ['/', '/webhook.php', '/max-webhook.php'], true)) $path = '/[configured-webhook]';
-            $urls[] = $parts['scheme'] . '://' . $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '') . $path;
+            if (!in_array($path, ['/', '/webhook.php', '/max-webhook.php'], true)
+                || $scheme !== $parts['scheme'] || isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])) {
+                // Removing private URL components must not turn a foreign
+                // endpoint into the exact URL owned by this installation.
+                $path = '/[configured-webhook]';
+            }
+            $urls[] = $scheme . '://' . $parts['host'] . (isset($parts['port']) ? ':' . $parts['port'] : '') . $path;
         }
         return array_values(array_unique($urls));
     }
@@ -190,7 +201,9 @@ final class InstallerApplication
     {
         $platform = $this->platform($input['platform'] ?? null);
         $token = $this->token($platform, $input['token'] ?? null);
-        return ['identity' => $this->identity($platform, $token, []), 'existing_urls' => $this->safeUrls($this->subscriptions($platform, $token, []))];
+        // Two interactive reads must fit the broker's 35-second budget. The
+        // MAX SDK retains retries for background registration and verification.
+        return ['identity' => $this->identity($platform, $token, [], 1), 'existing_urls' => $this->safeUrls($this->subscriptions($platform, $token, [], 1))];
     }
 
     private function assertInactive(array $config): void

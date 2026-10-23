@@ -136,8 +136,12 @@ $tests['MAX CLI confirms old URL removal and never reports an ignored delete as 
 };
 
 $passed = 0;
+// Rewritten entry points also exercise HTTP error statuses. Keep the runner's
+// progress output buffered so later fixtures can still set those headers.
+ob_start();
 foreach ($tests as $name => $test) {
     try { $test(); ++$passed; echo 'PASS ', $name, PHP_EOL; }
     catch (Throwable $error) { fwrite(STDERR, 'FAIL ' . $name . ': ' . $error->getMessage() . PHP_EOL); exit(1); }
 }
 echo 'deep CLI setup tests passed: ', $passed, PHP_EOL;
+ob_end_flush();

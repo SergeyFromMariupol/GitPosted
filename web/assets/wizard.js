@@ -44,11 +44,9 @@
         const expected = safeHttpsUrl(baseUrl, platform === 'max' ? 'max-webhook.php' : 'webhook.php');
         return [...new Set((Array.isArray(urls) ? urls : []).filter((value) => {
             if (typeof value !== 'string' || value === '') return false;
-            try {
-                return new URL(value).href !== expected;
-            } catch (_) {
-                return true;
-            }
+            // The root helper compares exact endpoint strings. Browser URL
+            // canonicalization must not silently bypass its consent check.
+            return value !== expected;
         }))];
     }
 
@@ -572,7 +570,7 @@
         state.step = job.type === 'host' ? 0 : 1;
         state.maxStep = state.step;
         applyStatus(state.status);
-        if (job.type === 'install') setError('settings-error', 'Введите пароль и выбранные токены заново. Существующая база и её структура будут сохранены.');
+        if (job.type === 'install') setError('settings-error', 'Введите пароль и выбранные токены заново. База сохранится. Если подключение бота уже начиналось, оставьте его включённым; можно указать новый токен того же бота. Сменить бота можно после установки в админке.');
     });
     $('logout-button').addEventListener('click', async () => {
         if (state.busy) return;

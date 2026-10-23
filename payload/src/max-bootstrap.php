@@ -125,8 +125,11 @@ final class GitPostedMaxApi
     private string $token;
     private ?string $caFile;
 
-    public function __construct(private readonly array $config)
+    public function __construct(private readonly array $config, private readonly int $requestAttempts = 4)
     {
+        if ($this->requestAttempts < 1 || $this->requestAttempts > 4) {
+            throw new InvalidArgumentException('MAX API request attempt budget must be between one and four.');
+        }
         $this->token = trim((string) ($config['max_bot_token'] ?? ''));
         if ($this->token === '') {
             throw new RuntimeException('MAX bot token is not configured.');
@@ -168,7 +171,7 @@ final class GitPostedMaxApi
         // channel publication. Explicit rejections such as 429 and
         // attachment.not.ready are safe to retry because MAX did not create a
         // message for that request.
-        $delaysMs = [0, 250, 750, 1500];
+        $delaysMs = array_slice([0, 250, 750, 1500], 0, $this->requestAttempts);
         $lastException = null;
 
         foreach ($delaysMs as $attempt => $delayMs) {

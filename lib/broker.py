@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import signal
 import socket
 import socketserver
 import struct
@@ -95,27 +96,58 @@ def settings(value):
 
 
 def helper(request, timeout=45):
+    child = None
     try:
-        child = subprocess.run(['runuser', '-u', p.APP_USER, '--', 'env', 'POSTED_CONFIG_FILE=' + str(p.CONFIG),
+        child = subprocess.Popen(['runuser', '-u', p.APP_USER, '--', 'env', 'POSTED_CONFIG_FILE=' + str(p.CONFIG),
                  '/usr/bin/php', '-d', 'display_errors=0', '-d', 'log_errors=0', p.INSTALL / 'bin/application.php'],
-                input=json.dumps(request).encode(), timeout=timeout, capture_output=True, check=False)
-        raw = child.stdout
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        try:
+            raw, _ = child.communicate(input=json.dumps(request).encode(), timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Killing only runuser leaves its PHP child alive. That child could
+            # still register an obsolete webhook after a failed job was revised.
+            # The private process group belongs only to this fixed helper call.
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.communicate(timeout=5)
+            failure('APPLICATION_FAILED', 'Проверка приложения не завершилась.')
         if len(raw) > 65536:
             failure('APPLICATION_FAILED', 'Приложение не подтвердило действие.')
     except (OSError, subprocess.TimeoutExpired):
         failure('APPLICATION_FAILED', 'Проверка приложения не завершилась.')
+    finally:
+        if child is not None:
+            if child.poll() is None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass  # SIGKILL is pending if the kernel is blocked in I/O.
+            for stream in (child.stdin, child.stdout, child.stderr):
+                if stream is not None:
+                    stream.close()
     try:
         result = json.loads(raw)
     except (ValueError, TypeError):
         failure('APPLICATION_FAILED', 'Приложение не подтвердило действие.')
     if not isinstance(result, dict) or result.get('ok') is not True or child.returncode != 0:
-        code = result.get('error', {}).get('code', '') if isinstance(result, dict) else ''
+        error = result.get('error') if isinstance(result, dict) else None
+        code = error.get('code', '') if isinstance(error, dict) else ''
+        if not isinstance(code, str):
+            code = ''
         safe = {'TAKEOVER_REQUIRED': 'У бота уже есть другой webhook. Подтвердите переключение.',
                 'PLATFORM_API_FAILED': 'Платформа не подтвердила запрос. Проверьте токен и доступ к API.',
                 'WEBHOOK_VERIFY_FAILED': 'Платформа не подтвердила адрес webhook.',
                 'COMMANDS_NOT_CONFIRMED': 'Платформа не подтвердила меню команд. Продолжите существующую установку.',
                 'SCHEMA_INVALID': 'Структура базы не прошла проверку.'}
         raise p.Failure(code if code in safe else 'APPLICATION_FAILED', safe.get(code, 'Приложение не подтвердило действие.'))
+    if not isinstance(result.get('result'), dict):
+        failure('APPLICATION_FAILED', 'Приложение не подтвердило действие.')
     return result['result']
 
 
@@ -165,6 +197,43 @@ class Broker:
                 and bool(self.private.get('settings')) and not (p.STATE / 'installed.json').exists()
                 and not config.get('telegram_bot_enabled') and not config.get('max_bot_enabled')
                 and len(activation) == 1 and activation[0].get('status') == 'pending')
+
+    def bot_binding(self, platform):
+        bindings = self.private.get('bot_bindings', {})
+        if not isinstance(bindings, dict):
+            failure('STATE_UNAVAILABLE', 'Состояние личности бота недоступно.')
+        binding = bindings.get(platform)
+        if binding is not None:
+            if (not isinstance(binding, dict) or set(binding) != {'id', 'started'}
+                    or not isinstance(binding['id'], str) or type(binding['started']) is not bool
+                    or (binding['id'] != '' and re.fullmatch(r'[1-9][0-9]{0,63}', binding['id']) is None)):
+                failure('STATE_UNAVAILABLE', 'Состояние личности бота недоступно.')
+            return copy.deepcopy(binding)
+        # Older interrupted packages did not store API identities. Telegram's
+        # authenticated token embeds its bot id; an opaque MAX token does not.
+        steps = self.public.get('job', {}).get('steps', [])
+        started = any(step.get('id') == platform and step.get('status') in ('running', 'failed', 'done') for step in steps)
+        config = self.private.get('config', {})
+        selected = self.private.get('settings', {}).get(platform, {})
+        started = started and selected.get('enabled') is True
+        identity = ''
+        if started and platform == 'telegram':
+            identity = str(config.get('bot_token', '')).split(':', 1)[0]
+            if re.fullmatch(r'[1-9][0-9]{5,11}', identity) is None:
+                failure('REGISTERED_BOT_CHANGE_DENIED', 'Не удалось подтвердить ранее подключённого бота. Продолжите прежнюю настройку.')
+        return {'id': identity, 'started': started}
+
+    def checked_bot_binding(self, platform, checked):
+        identity = checked.get('identity', {}) if isinstance(checked, dict) else {}
+        bot_id = identity.get('id') if isinstance(identity, dict) else None
+        if not isinstance(bot_id, str) or re.fullmatch(r'[1-9][0-9]{0,63}', bot_id) is None:
+            failure('APPLICATION_FAILED', 'API не подтвердил личность выбранного бота.')
+        binding = self.bot_binding(platform)
+        if binding['started'] and binding['id'] and not hmac.compare_digest(binding['id'], bot_id):
+            failure('REGISTERED_BOT_CHANGE_DENIED', 'Этот шаг уже подключал другого бота. Используйте новый токен того же бота; сменить бота можно в админке после завершения.')
+        binding['id'] = bot_id
+        self.private.setdefault('bot_bindings', {})[platform] = binding
+        return identity
 
     def dispatch(self, action, value):
         if not isinstance(value, dict):
@@ -242,11 +311,18 @@ class Broker:
                             failure('REVISE_DENIED', 'Боты уже включены или состояние не подтверждено. Продолжите существующую установку.')
                         revised = settings(value.get('settings'))
                         config = self.private.get('config')
+                        bindings = {platform: self.bot_binding(platform) for platform in ('telegram', 'max')}
+                        for platform, token_key in (('telegram', 'bot_token'), ('max', 'max_bot_token')):
+                            binding = bindings[platform]
+                            if binding['started'] and (not revised[platform]['enabled']
+                                    or (platform == 'max' and not binding['id'] and config
+                                        and config.get(token_key, '') != revised[platform]['token'])):
+                                failure('REGISTERED_BOT_CHANGE_DENIED', 'Этот бот уже подключался. Сохраните платформу и токен того же бота; смена или отключение доступны после завершения в админке.')
                         if config:
                             for platform, token_key, username_key, secret_key in (
                                     ('telegram', 'bot_token', 'bot_username', 'webhook_secret'),
                                     ('max', 'max_bot_token', 'max_bot_username', 'max_webhook_secret')):
-                                if config.get(token_key, '') != revised[platform]['token']:
+                                if config.get(token_key, '') != revised[platform]['token'] and not bindings[platform]['started']:
                                     config[secret_key] = secrets.token_hex(32)
                                 config[token_key] = revised[platform]['token']
                                 config[username_key] = ''
@@ -257,6 +333,7 @@ class Broker:
                                           mtproto={'api_id': revised['mtproto']['api_id'], 'api_hash': revised['mtproto']['api_hash'],
                                                    'phone': '', 'two_factor_password': '', 'source_bot': ''})
                         self.private['settings'] = revised
+                        self.private['bot_bindings'] = bindings
                         for step in job['steps']:
                             if step['id'] in ('config', 'telegram', 'max', 'verify', 'activate', 'finish'):
                                 step['status'] = 'pending'
@@ -392,7 +469,8 @@ class Broker:
             for platform in ('telegram', 'max'):
                 if selected[platform]['enabled']:
                     checked = helper({'action': 'check', 'platform': platform, 'token': selected[platform]['token']}, timeout=35)
-                    config['bot_username' if platform == 'telegram' else 'max_bot_username'] = checked['identity']['username']
+                    identity = self.checked_bot_binding(platform, checked)
+                    config['bot_username' if platform == 'telegram' else 'max_bot_username'] = identity['username']
             self.save()
             self.write_config(config)
         elif step == 'schema':
@@ -400,11 +478,21 @@ class Broker:
         elif step in ('telegram', 'max'):
             if not selected[step]['enabled']:
                 return 'skipped'
+            binding = self.bot_binding(step)
+            if not binding['id']:
+                # Anchor a legacy interrupted registration with its unchanged
+                # configured token before retrying any mutation.
+                checked = helper({'action': 'check', 'platform': step, 'token': selected[step]['token']}, timeout=35)
+                self.checked_bot_binding(step, checked)
+                binding = self.bot_binding(step)
+            binding['started'] = True
+            self.private.setdefault('bot_bindings', {})[step] = binding
+            self.save()
             # A confirmed webhook plus localized command menus needs several
             # bounded API calls; retain a finite budget for the entire child.
             helper({'action': 'register', 'platform': step, 'takeover': selected[step]['takeover']}, timeout=300)
         elif step == 'verify':
-            helper({'action': 'verify', 'platforms': [x for x in ('telegram', 'max') if selected[x]['enabled']]}, timeout=90)
+            helper({'action': 'verify', 'platforms': [x for x in ('telegram', 'max') if selected[x]['enabled']]}, timeout=300)
         elif step == 'activate':
             config['telegram_bot_enabled'] = selected['telegram']['enabled']
             config['max_bot_enabled'] = selected['max']['enabled']
@@ -420,6 +508,7 @@ class Broker:
             self.private.pop('settings', None)
             self.private.pop('config', None)
             self.private.pop('enrollment', None)
+            self.private.pop('bot_bindings', None)
             (p.STATE / 'access.json').unlink(missing_ok=True)
         return None
 
