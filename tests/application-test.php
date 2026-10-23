@@ -31,6 +31,8 @@ function applicationFixture(array $config, array &$calls, array &$state, ?callab
             $state['telegram'] = ['url' => $body['url'], 'allowed_updates' => $body['allowed_updates']];
             return ['ok' => true, 'result' => true];
         }
+        if (in_array($path, ['setMyCommands', 'setChatMenuButton'], true)) return ['ok' => true, 'result' => true];
+        if ($path === '/me/commands' && $method === 'PATCH') return ['commands' => $body['commands']];
         if ($path === '/subscriptions' && $method === 'GET') return ['subscriptions' => $state['max'] ?? []];
         if ($path === '/subscriptions' && $method === 'POST') {
             if (empty($state['reject_confirmation'])) {
@@ -115,12 +117,12 @@ $tests['Telegram-only registers and verifies while MAX token is empty and flags 
     applicationAssert(count($set) === 1 && $set[0]['body']['drop_pending_updates'] === false, 'Unexpected Telegram mutation');
     applicationAssert($set[0]['body']['url'] === 'https://selfhost.example/webhook.php', 'Wrong Telegram endpoint');
 };
-$tests['MAX-only first attach needs no old MAX or Telegram credentials and never changes commands'] = static function (): void {
+$tests['MAX-only first attach needs no old credentials and installs the fixed commands'] = static function (): void {
     $calls = []; $state = []; $app = applicationFixture(applicationConfig('max'), $calls, $state);
     applicationAssert($app->run(['action' => 'register', 'platform' => 'max'])['ok'], 'MAX first attachment failed');
     applicationAssert($app->run(['action' => 'verify', 'platform' => 'max'])['ok'], 'Pending MAX verification failed');
     applicationAssert(array_unique(array_column($calls, 'platform')) === ['max'], 'Omitted Telegram was contacted');
-    foreach ($calls as $call) applicationAssert(in_array($call['path'], ['/me', '/subscriptions'], true), 'Unexpected branding or message API call');
+    foreach ($calls as $call) applicationAssert(in_array($call['path'], ['/me', '/subscriptions', '/me/commands'], true), 'Unexpected branding or message API call');
 };
 $tests['neither platform initializes the full schema and verifies without network calls'] = static function (): void {
     $calls = []; $state = []; $schemaCalls = [];
@@ -143,7 +145,7 @@ $tests['foreign endpoint requires takeover before any mutation and MAX confirms 
     $calls = [];
     applicationAssert($app->run(['action' => 'register', 'platform' => 'max', 'takeover' => true])['ok'], 'Confirmed takeover failed');
     $sequence = array_map(static fn(array $row): string => $row['method'] . ' ' . $row['path'], $calls);
-    applicationAssert($sequence === ['GET /me', 'GET /subscriptions', 'POST /subscriptions', 'GET /subscriptions', 'DELETE /subscriptions', 'GET /subscriptions'], 'Replacement was not confirmed before deletion');
+    applicationAssert($sequence === ['GET /me', 'GET /subscriptions', 'POST /subscriptions', 'GET /subscriptions', 'PATCH /me/commands', 'DELETE /subscriptions', 'GET /subscriptions'], 'Replacement and commands were not confirmed before deletion');
 };
 $tests['unconfirmed replacement keeps the previous subscription'] = static function (): void {
     $calls = []; $state = ['max' => [['url' => 'https://old.example/private', 'update_types' => []]], 'reject_confirmation' => true];

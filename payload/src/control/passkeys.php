@@ -115,9 +115,29 @@ function passkeySite(): array
     return $site = ['origin' => $origin, 'rp_id' => $host];
 }
 
+/** @return array{supported:bool,reason:string} */
+function passkeyCapabilities(): array
+{
+    try {
+        passkeySite();
+        return ['supported' => true, 'reason' => ''];
+    } catch (Throwable) {
+        return ['supported' => false, 'reason' => 'Для входа по ключу доступа подключите HTTPS-домен. По IP используйте логин и пароль.'];
+    }
+}
+
+/** @return array{origin:string,rp_id:string} */
+function requirePasskeySite(): array
+{
+    if (!passkeyCapabilities()['supported']) {
+        fail(passkeyCapabilities()['reason'], 409);
+    }
+    return passkeySite();
+}
+
 function verifyClient(array $response, string $type, string $expectedChallenge): string
 {
-    $site = passkeySite();
+    $site = requirePasskeySite();
     $raw = b64uDecode($response['clientDataJSON'] ?? '');
     $client = json_decode($raw, true);
     if (!is_array($client)
@@ -130,7 +150,7 @@ function verifyClient(array $response, string $type, string $expectedChallenge):
 
 function parseAuthenticator(string $encoded): array
 {
-    $site = passkeySite();
+    $site = requirePasskeySite();
     $raw = b64uDecode($encoded);
     if (strlen($raw) < 37) fail('Некорректные данные устройства.');
     if (!hash_equals(hash('sha256', $site['rp_id'], true), substr($raw, 0, 32))) fail('Ключ выпущен для другого сайта.');
@@ -164,11 +184,12 @@ try {
 
     if ($path === 'status' && $method === 'GET') {
         $count = (int) $pdo->query('SELECT COUNT(*) FROM posted_admin_passkeys')->fetchColumn();
-        reply(['ok' => true, 'available' => $count > 0, 'supported' => true]);
+        $capabilities = passkeyCapabilities();
+        reply(['ok' => true, 'available' => $capabilities['supported'] && $count > 0] + $capabilities);
     }
 
     if ($path === 'auth/options' && $method === 'POST') {
-        $site = passkeySite();
+        $site = requirePasskeySite();
         $rows = $pdo->query('SELECT credential_id,transports FROM posted_admin_passkeys ORDER BY id')->fetchAll(PDO::FETCH_ASSOC);
         if (!$rows) fail('Ключи доступа ещё не добавлены.', 404);
         reply([
@@ -217,10 +238,10 @@ try {
     if (!$authorized) fail('Требуется вход в панель.', 401);
     if (!hash_equals((string) ($_SESSION['csrf'] ?? ''), (string) ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ''))) fail('CSRF validation failed', 403);
 
-    if ($path === '' && $method === 'GET') reply(['ok' => true, 'passkeys' => listKeys($pdo), 'limit' => 3]);
+    if ($path === '' && $method === 'GET') reply(['ok' => true, 'passkeys' => listKeys($pdo), 'limit' => 3] + passkeyCapabilities());
 
     if ($path === 'register/options' && $method === 'POST') {
-        $site = passkeySite();
+        $site = requirePasskeySite();
         if ((int) $pdo->query('SELECT COUNT(*) FROM posted_admin_passkeys')->fetchColumn() >= 3) fail('Можно добавить не более трёх ключей доступа.');
         $rows = $pdo->query('SELECT credential_id FROM posted_admin_passkeys')->fetchAll(PDO::FETCH_COLUMN);
         reply([

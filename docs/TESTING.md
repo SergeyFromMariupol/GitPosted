@@ -32,6 +32,13 @@ php tests/wizard-audit-test.php
 python3 -B tests/wizard-audit-test.py
 python3 -B tests/provision-audit-test.py
 node --test tests/wizard-audit-ui.test.cjs
+php tests/deep-platform-test.php
+php tests/deep-cli-setup-test.php
+php tests/deep-passkeys-test.php
+php tests/deep-session-test.php
+python3 -B tests/deep-provision-test.py
+python3 -B tests/deep-wizard-test.py
+node --test tests/deep-passkeys-ui.test.cjs tests/deep-wizard-ui.test.cjs
 ```
 
 Тест мастера использует адаптеры состояния, broker, часов и session в памяти.
@@ -86,6 +93,26 @@ API платформ перехватывается внутри временн�
 IPv6, права и symlink ресурсов, долговечный checkpoint, конкурентный статус,
 исправление ошибочного токена до активации, подтверждение переноса чужого
 webhook и совпадение MAX webhook secret при замене токена.
+
+Углублённые проверки отдельно покрывают SIGKILL после закрытия nginx-мастера,
+но до marker; частичный Python venv; публикацию начального STATE с marker и lock
+одним rename без перезаписи чужого каталога; права/file fsync/rename/directory
+fsync; потерянный JSON 503 после принятого задания и поздний повторный start.
+
+После установки регистрируются фиксированные меню команд Telegram/МАКС.
+Их подтверждение и ошибки проверяются с перехваченным transport, без отправок.
+CLI `setup.php`/`max-setup.php` также требуют `--takeover` для чужого webhook;
+их диагностические ответы не содержат raw API data, секретных paths и query.
+
+Ключи доступа имеют отдельный ограниченный nginx route с фиксированным PHP
+файлом и PATH_INFO. По IP поддерживается вход с паролем; интерфейс объясняет
+необходимость домена для WebAuthn. Проверяются capability, отключение кнопки и
+лимит ключей. Полный HTTPS-прогон регистрации/подписи/входа выполняется отдельно
+на тестовой панели с временным ключом, который затем удаляется.
+
+В обоих FPM pools явно включена PHP-очистка custom session paths: вероятность
+1/100, срок бездействия 3600 секунд. Native PHP fixture принудительно запускает
+GC только в своём временном каталоге и проверяет сохранение свежей сессии.
 
 ## Свежая Ubuntu 24.04 — реальная приёмка
 

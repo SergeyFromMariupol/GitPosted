@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import ctypes
+import errno
 import fcntl
 import hashlib
 import importlib.util
@@ -21,7 +23,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 
-VERSION = '0.1.0-rc.3'
+VERSION = '0.1.0-rc.4'
 INSTALL = Path('/opt/gitposted-installer')
 APP = Path('/opt/gitposted')
 STATE = Path('/var/lib/gitposted-installer')
@@ -79,10 +81,11 @@ def atomic(path, content, mode=0o600, uid=0, gid=0):
         with os.fdopen(fd, 'wb') as stream:
             stream.write(content.encode() if isinstance(content, str) else content)
             stream.flush()
-            os.fsync(stream.fileno())
             os.fchmod(stream.fileno(), mode)
             os.fchown(stream.fileno(), uid, gid)
+            os.fsync(stream.fileno())
         os.replace(temporary, path)
+        sync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -279,6 +282,59 @@ def persist_bundle(source, files):
         atomic(destination, content, 0o644)
 
 
+def sync_directory(path):
+    """Persist directory entries, not only the bytes of their regular files."""
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def publish_initial_state(source, target):
+    """Linux no-replace directory commit; an existing path is never adopted."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = libc.renameat2
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(-100, os.fsencode(source), -100, os.fsencode(target), 1) != 0:  # AT_FDCWD, RENAME_NOREPLACE
+        code = ctypes.get_errno()
+        if code in (errno.EEXIST, errno.ENOTEMPTY):
+            raise Failure('EXISTING_INSTALLATION', 'Каталог состояния уже появился. Не перезаписывайте его; проверьте существующую установку.')
+        raise Failure('STATE_UNAVAILABLE', 'Не удалось сохранить начальное состояние установки.')
+
+
+def initialize_state(ip, host):
+    """Publish marker and lock together, so every visible state can resume.
+
+    A killed process before publication may leave an unpublished private
+    sibling. It is never adopted or searched for by later installations.
+    """
+    if STATE.exists() or STATE.is_symlink() or not STATE.is_absolute() or STATE.parent.resolve() != STATE.parent:
+        raise Failure('EXISTING_INSTALLATION', 'Каталог состояния уже существует или имеет неожиданный путь.')
+    temporary = STATE.parent / ('.' + STATE.name + '-initial.' + secrets.token_hex(8))
+    temporary.mkdir(mode=0o700)
+    try:
+        save_json(temporary / 'bootstrap.json', {'installer': 'gitposted-clean-v1', 'public_ip': ip, 'host': host})
+        descriptor = os.open(temporary / 'installer.lock', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        sync_directory(temporary)
+        publish_initial_state(temporary, STATE)
+        sync_directory(STATE.parent)
+    finally:
+        if temporary.exists() and not temporary.is_symlink() and temporary.resolve() == temporary:
+            # Only the exact two files this initializer creates; no recursion.
+            members = list(temporary.iterdir())
+            if any(path.name not in ('bootstrap.json', 'installer.lock') or path.is_symlink() or not path.is_file() for path in members):
+                raise Failure('UNSAFE_PATH', 'Временное начальное состояние содержит неожиданный файл.')
+            for path in members:
+                path.unlink()
+            temporary.rmdir()
+
+
 def php_password(password):
     return run(['php', '-r', '$v=json_decode(stream_get_contents(STDIN),true,8,JSON_THROW_ON_ERROR); echo password_hash($v["password"], defined("PASSWORD_ARGON2ID")?PASSWORD_ARGON2ID:PASSWORD_DEFAULT);'],
                data=json.dumps({'password': password}).encode(), safe='Не удалось создать хеш пароля.').decode()
@@ -332,6 +388,15 @@ index index.php;
 location ~ /\\. {{ deny all; }}
 location ^~ /tools/ {{ return 404; }}
 location ~ \\.(?:py|sql|gz|ini|log|json|sh|md|pem|lock)$ {{ return 404; }}
+location ~ "^/control/passkeys\\.php(?<gitposted_passkey_path>/(?:status|auth/(?:options|verify)|register/(?:options|verify)|[0-9]{{1,20}}))?/?$" {{
+ include fastcgi_params;
+ fastcgi_param HTTPS on;
+ fastcgi_param SCRIPT_FILENAME {APP}/current/src/control/passkeys.php;
+ fastcgi_param SCRIPT_NAME /control/passkeys.php;
+ fastcgi_param PATH_INFO $gitposted_passkey_path;
+ fastcgi_read_timeout 60s;
+ fastcgi_pass unix:/run/php/gitposted.sock;
+}}
 location ~ ^/(?:index|webhook|max-webhook|control/index|privacy/index|user-agreement/index)\\.php$ {{
  include fastcgi_params;
  fastcgi_param HTTPS on;
@@ -486,6 +551,9 @@ env[POSTED_CONFIG_FILE] = {CONFIG}
 env[POSTED_INSTALLER_STATE_DIR] = {STATE}
 php_admin_value[open_basedir] = {script_root}
 php_admin_value[session.save_path] = {session_dir}
+php_admin_value[session.gc_probability] = 1
+php_admin_value[session.gc_divisor] = 100
+php_admin_value[session.gc_maxlifetime] = 3600
 php_admin_flag[display_errors] = off
 php_admin_flag[log_errors] = on
 php_admin_value[error_log] = {LOG / 'php.log' if user == APP_USER else STATE / 'sessions/php.log'}
@@ -573,6 +641,28 @@ def reconcile_installed():
     return True
 
 
+def reconcile_pending_finish(public):
+    """Reopen the wizard if nginx closed before the final marker was committed.
+
+    The final nginx reload and installed.json are separate external effects.
+    Until the marker exists, a killed finish step must remain retryable through
+    the browser. Never reopen a committed installation or touch app config.
+    """
+    marker = STATE / 'installed.json'
+    if not isinstance(public, dict) or public.get('installed') is True or public.get('tls_ready') is not True \
+            or marker.exists() or marker.is_symlink():
+        return False
+    job = public.get('job', {})
+    if not isinstance(job, dict) or job.get('type') != 'install':
+        return False
+    steps = job.get('steps', [])
+    finish = [step for step in steps if isinstance(step, dict) and step.get('id') == 'finish'] if isinstance(steps, list) else []
+    if len(finish) != 1 or finish[0].get('status') not in ('running', 'failed', 'done'):
+        return False
+    configure_nginx({**public, 'installed': False})
+    return True
+
+
 def resume_ready():
     if reconcile_installed():
         return True
@@ -584,6 +674,7 @@ def resume_ready():
         if any(private.get(key) for key in ('settings', 'config', 'job')):
             raise Failure('STATE_CONFLICT', 'Установка приложения уже начата. Не переустанавливайте инфраструктуру; проверьте состояние задания.')
         return False
+    reconcile_pending_finish(public)
     # Reissue enrollment only. Never copy code, reset public metadata, restart
     # an active job or replace application/configuration during --resume.
     code = enrollment()
@@ -599,8 +690,11 @@ def prepare_worker(release):
         raise Failure('UNSAFE_PATH', 'Каталог Python загрузчика должен быть обычным каталогом данных.')
     if worker.exists() and worker.stat().st_uid != identity(APP_USER)[0]:
         raise Failure('UNSAFE_PATH', 'Python загрузчика должен принадлежать пользователю приложения.')
-    if not worker.exists():
-        run(['runuser', '-u', APP_USER, '--', 'python3', '-m', 'venv', '--copies', worker])
+    # venv creates its directory before its interpreter and bundled pip. A
+    # killed first attempt must be repairable; existence alone is no checkpoint.
+    # Re-running stdlib venv preserves installed packages and stays under the
+    # application UID. Ready web installs never enter this provisioning path.
+    run(['runuser', '-u', APP_USER, '--', 'python3', '-m', 'venv', '--copies', worker])
     # This tree is writable by the application. Never execute it as root and
     # never recursively follow it with privileged ownership changes on resume.
     run(['runuser', '-u', APP_USER, '--', worker / 'bin/python3', '-I', '-m', 'pip', 'install', '--disable-pip-version-check',
@@ -727,7 +821,7 @@ def main():
         source = Path(__file__).resolve().parents[1]
         files = package_files(source)
         if not STATE.exists():
-            directory(STATE, 0o700)
+            initialize_state(ip, host)
         with installer_lock():
             if args.resume and resume_ready():
                 return

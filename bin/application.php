@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once dirname(__DIR__) . '/payload/src/bot-commands.php';
+
 /** Private broker child. Credentials arrive only on stdin or in installed config. */
 final class InstallerApplicationFailure extends RuntimeException
 {
@@ -121,6 +123,7 @@ final class InstallerApplication
                         ['GET', '/subscriptions'] => $api->subscriptions(),
                         ['POST', '/subscriptions'] => $api->subscribe($body['url'], $body['secret'], $body['update_types']),
                         ['DELETE', '/subscriptions'] => $api->unsubscribe($body['url']),
+                        ['PATCH', '/me/commands'] => $api->setCommands($body['commands']),
                         default => throw new LogicException('Unsupported installer API action'),
                     };
                 }
@@ -293,18 +296,60 @@ final class InstallerApplication
             $result = $this->api($platform, $token, 'POST', 'setWebhook', ['url' => $url, 'secret_token' => $secret,
                 'allowed_updates' => $events, 'max_connections' => 1, 'drop_pending_updates' => false], $config);
             if (($result['result'] ?? null) !== true) throw new InstallerApplicationFailure('WEBHOOK_NOT_CONFIRMED', 'Telegram не подтвердил регистрацию webhook.');
+            $this->confirmEndpoint($platform, $this->subscriptions($platform, $token, $config), $url);
+            $this->registerCommands($platform, $token, $config);
         } else {
             $this->api($platform, $token, 'POST', '/subscriptions', ['url' => $url, 'secret' => $secret, 'update_types' => $events], $config);
             // Confirm the replacement before removing any operator-approved old URL.
             $confirmed = $this->subscriptions($platform, $token, $config);
             $targetRows = array_values(array_filter($confirmed, static fn(array $row): bool => $row['url'] === $url));
             $this->confirmEndpoint($platform, $targetRows, $url);
+            $this->registerCommands($platform, $token, $config);
             foreach (array_unique(array_column($foreign, 'url')) as $oldUrl) {
                 $this->api($platform, $token, 'DELETE', '/subscriptions', ['url' => $oldUrl], $config);
             }
         }
         $this->confirmEndpoint($platform, $this->subscriptions($platform, $token, $config), $url);
         return ['platform' => $platform, 'identity' => $identity, 'webhook_registered' => true];
+    }
+
+    /** Set the new application's fixed menus only after its webhook is confirmed. */
+    private function registerCommands(string $platform, string $token, array $config): void
+    {
+        if ($platform === 'max') {
+            $expected = gitpostedMaxCommands();
+            $result = $this->api($platform, $token, 'PATCH', '/me/commands', ['commands' => $expected], $config);
+            $actual = $result['commands'] ?? null;
+            if (!is_array($actual) || !array_is_list($actual)) {
+                throw new InstallerApplicationFailure('COMMANDS_NOT_CONFIRMED', 'МАКС не подтвердил меню команд. Продолжите настройку бота.');
+            }
+            $normalized = [];
+            foreach ($actual as $command) {
+                if (!is_array($command) || !is_string($command['name'] ?? null) || !is_string($command['description'] ?? null)) {
+                    throw new InstallerApplicationFailure('COMMANDS_NOT_CONFIRMED', 'МАКС не подтвердил меню команд. Продолжите настройку бота.');
+                }
+                $normalized[] = ['name' => ltrim(trim($command['name']), '/'), 'description' => trim($command['description'])];
+            }
+            $sort = static fn(array $left, array $right): int => [$left['name'], $left['description']] <=> [$right['name'], $right['description']];
+            usort($expected, $sort);
+            usort($normalized, $sort);
+            if ($normalized !== $expected) {
+                throw new InstallerApplicationFailure('COMMANDS_NOT_CONFIRMED', 'МАКС не подтвердил меню команд. Продолжите настройку бота.');
+            }
+            return;
+        }
+        foreach (gitpostedTelegramCommandSets() as $language => $commands) {
+            $body = ['commands' => $commands];
+            if ($language !== 'default') $body['language_code'] = $language;
+            $result = $this->api($platform, $token, 'POST', 'setMyCommands', $body, $config);
+            if (($result['result'] ?? null) !== true) {
+                throw new InstallerApplicationFailure('COMMANDS_NOT_CONFIRMED', 'Telegram не подтвердил меню команд. Продолжите настройку бота.');
+            }
+        }
+        $result = $this->api($platform, $token, 'POST', 'setChatMenuButton', ['menu_button' => ['type' => 'commands']], $config);
+        if (($result['result'] ?? null) !== true) {
+            throw new InstallerApplicationFailure('COMMANDS_NOT_CONFIRMED', 'Telegram не подтвердил кнопку меню. Продолжите настройку бота.');
+        }
     }
 
     private function verify(array $input): array

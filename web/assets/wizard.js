@@ -198,7 +198,10 @@
             if (!response.ok || !data || data.ok !== true) {
                 const error = new Error(safeMessage(data && data.error && data.error.message));
                 error.code = data && data.error && typeof data.error.code === 'string' ? data.error.code : 'REQUEST_FAILED';
-                error.definitive = true;
+                // A server error can follow a committed root operation whose
+                // reply was lost. Reconcile its status before offering retry.
+                error.definitive = response.status < 500;
+                error.status = response.status;
                 if (response.status === 401 || error.code === 'AUTH_REQUIRED' || error.code === 'UNAUTHENTICATED') {
                     state.csrf = '';
                     if (state.status) state.status.authenticated = false;
@@ -251,6 +254,7 @@
             return;
         }
         if (status.authenticated !== true) {
+            clearSecrets();
             cancelPoll();
             if (enrollmentCode && !state.loginPending) {
                 showScreen('loading-screen'); setText('loading-title', 'Открываем безопасную настройку'); loginFromLink();
@@ -259,6 +263,7 @@
         }
         enrollmentCode = null;
         const job = normalizedJob(status.job);
+        let unstartedMutation = null;
         if (job.status === 'running' || (job.status === 'failed' && state.editingJobId !== job.id)) {
             state.editingJobId = ''; state.reviseJobId = '';
             state.pendingMutation = null; renderJob(job); showScreen('job-screen');
@@ -269,6 +274,14 @@
         // Keep polling a terminal install until the matching installed metadata arrives.
         if (job.type === 'install' && job.status === 'complete') {
             state.pendingMutation = null; renderJob(job); showScreen('job-screen'); schedulePoll(); return;
+        }
+        if (state.pendingMutation && (job.status === 'idle' ||
+            (state.pendingMutation.type === 'install' && job.type === 'host' && job.status === 'complete'))) {
+            // The server reports no matching install. Offer an explicit retry;
+            // never automatically repeat a start with an uncertain result.
+            // Root's lock/settings guard also rejects a late duplicate request.
+            unstartedMutation = state.pendingMutation;
+            state.pendingMutation = null;
         }
         if (job.type === 'host' && job.status === 'complete') state.hostReady = true;
         if (job.status === 'complete') state.pendingMutation = null;
@@ -284,6 +297,8 @@
             setText('host-ready-url', status.site_url || status.base_url || '');
         }
         showScreen('wizard-screen'); showStep(state.step, false);
+        if (unstartedMutation) setError(unstartedMutation.type === 'host' ? 'host-error' : 'settings-error',
+            'Сервер не сообщает о запущенном задании. Проверьте настройки и повторите запуск вручную. Повтор автоматически не выполнялся.');
     }
 
     async function refreshStatus(manual) {
@@ -481,7 +496,7 @@
             else { renderJob(normalizedJob({})); showScreen('job-screen'); }
             await refreshStatus(false);
         } catch (error) {
-            if (error.definitive) { state.pendingMutation = null; setError('settings-error', error.message); }
+            if (error.definitive && error.status !== 409 && error.status !== 410) { state.pendingMutation = null; setError('settings-error', error.message); }
             else { renderJob(normalizedJob({})); showScreen('job-screen'); $('job-offline').hidden = false; schedulePoll(1000); }
         } finally { setBusy(false); }
     }
@@ -534,7 +549,7 @@
             if (result.job) { state.status.job = result.job; state.pendingMutation = null; renderJob(normalizedJob(result.job)); showScreen('job-screen'); }
             await refreshStatus(false);
         } catch (error) {
-            if (error.definitive) { state.pendingMutation = null; setError('host-error', error.message); }
+            if (error.definitive && error.status !== 409 && error.status !== 410) { state.pendingMutation = null; setError('host-error', error.message); }
             else { renderJob(normalizedJob({ type: 'host' })); showScreen('job-screen'); $('job-offline').hidden = false; schedulePoll(1000); }
         } finally { $('host-progress').hidden = true; setBusy(false); }
     });

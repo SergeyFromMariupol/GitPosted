@@ -97,12 +97,13 @@
     window.adminCsrf = document.querySelector('input[name="csrf"]')?.value || '';
     const errorBox = document.getElementById('passkeyError');
     const addButton = document.getElementById('passkeyAddButton');
+    let siteSupportsPasskeys = true;
     const showError = (error) => {
         errorBox.textContent = error.message;
         errorBox.hidden = false;
     };
     const render = (keys) => {
-        addButton.disabled = keys.length >= 3 || !window.PublicKeyCredential;
+        addButton.disabled = keys.length >= 3 || !window.PublicKeyCredential || !siteSupportsPasskeys;
         list.innerHTML = keys.length ? keys.map((key) => `
             <div class="passkey-row">
                 <div><strong>${key.name}</strong><small>Добавлен: ${key.created_at}${key.last_used_at ? ` · использован: ${key.last_used_at}` : ''}</small></div>
@@ -116,7 +117,11 @@
             } catch (error) { showError(error); }
         }));
     };
-    request('').then((data) => render(data.passkeys)).catch(showError);
+    request('').then((data) => {
+        siteSupportsPasskeys = data.supported !== false;
+        render(data.passkeys);
+        if (!siteSupportsPasskeys) showError(new Error(data.reason || 'Для ключей доступа нужен HTTPS-домен.'));
+    }).catch(showError);
     addButton?.addEventListener('click', async () => {
         errorBox.hidden = true;
         try {

@@ -8,6 +8,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 require __DIR__ . '/max-bootstrap.php';
+require_once __DIR__ . '/setup-policy.php';
 
 try {
     $config = PostedConfig::get();
@@ -15,7 +16,7 @@ try {
         echo json_encode(['ok' => true, 'disabled' => true]) . PHP_EOL;
         exit;
     }
-    $options = getopt('', ['url::', 'seed::', 'no-webhook']);
+    $options = getopt('', ['url::', 'seed::', 'no-webhook', 'takeover']);
     $baseUrl = rtrim((string) ($config['base_url'] ?? $config['site_url'] ?? 'https://example.com'), '/');
     $webhookUrl = trim((string) ($options['url'] ?? $config['max_webhook_url'] ?? ($baseUrl . '/max-webhook.php')));
     $setupWebhook = !array_key_exists('no-webhook', $options);
@@ -25,12 +26,12 @@ try {
         throw new InvalidArgumentException('Webhook МАКС должен быть корректным HTTPS URL.');
     }
     $expectedUsername = ltrim(trim((string) ($config['max_bot_username'] ?? '')), '@');
-    if (preg_match('/^[A-Za-z0-9_]{3,128}$/D', $expectedUsername) !== 1) {
+    if (preg_match('/^[A-Za-z0-9_]{3,60}$/D', $expectedUsername) !== 1) {
         throw new RuntimeException('Username бота МАКС не настроен.');
     }
 
-    $app = posted_max_app();
-    $botInfo = $app->botInfo();
+    $api = new GitPostedMaxApi($config);
+    $botInfo = $api->me();
     $actualUsername = ltrim(trim((string) ($botInfo['username'] ?? '')), '@');
     if ($actualUsername === '' || !hash_equals(strtolower($expectedUsername), strtolower($actualUsername))) {
         throw new RuntimeException(
@@ -42,6 +43,12 @@ try {
     $removedSubscriptions = [];
     $subscriptionWarnings = [];
     $webhookResult = ['skipped' => true];
+    $before = $api->subscriptions();
+    $beforeRows = $before['subscriptions'] ?? (array_is_list($before) ? $before : null);
+    if (!is_array($beforeRows)) throw new GitPostedSetupPolicyFailure('МАКС не подтвердил список webhook. Настройка не изменена.');
+    $approvedForeign = gitpostedSetupRequireTakeover($beforeRows, $webhookUrl, array_key_exists('takeover', $options));
+    $app = posted_max_app();
+    $commandsConfigured = false;
     if ($setupWebhook) {
         // First create/update and confirm the replacement. Existing subscriptions
         // remain intact if validation or the MAX API request fails.
@@ -79,22 +86,24 @@ try {
                 'МАКС не подтвердил URL и полный набор событий новой webhook-подписки; старые подписки сохранены.'
             );
         }
+        $app->setCommands();
+        $commandsConfigured = true;
 
         // Removing by URL may remove every equal subscription. Keep duplicate
         // target rows rather than creating a delivery gap.
         if ($urlCount > 1) {
             $subscriptionWarnings[] = 'Обнаружено несколько подписок на целевой URL; они сохранены для непрерывной доставки.';
         }
-        foreach ($confirmedRows as $subscription) {
-            if (!is_array($subscription)) {
-                continue;
-            }
-            $url = trim((string) ($subscription['url'] ?? ''));
-            if ($url === '' || hash_equals($webhookUrl, $url)) {
-                continue;
-            }
+        foreach ($approvedForeign as $url) {
             $app->removeSubscription($url);
-            $removedSubscriptions[] = $url;
+            $remaining = $app->subscriptions();
+            $remainingRows = $remaining['subscriptions'] ?? (array_is_list($remaining) ? $remaining : null);
+            if (!is_array($remainingRows)) throw new GitPostedSetupPolicyFailure('МАКС не подтвердил удаление прежней подписки. Проверьте состояние перед повторной командой.');
+            gitpostedSetupRequireTakeover($remainingRows, $webhookUrl, true);
+            foreach ($remainingRows as $row) {
+                if (hash_equals($url, $row['url'])) throw new GitPostedSetupPolicyFailure('МАКС не подтвердил удаление прежней подписки. Проверьте состояние перед повторной командой.');
+            }
+            $removedSubscriptions[] = true;
         }
     }
 
@@ -128,26 +137,32 @@ try {
             'user_id' => $botInfo['user_id'] ?? null,
             'username' => $actualUsername,
         ],
-        'removed_subscriptions' => $removedSubscriptions,
+        'removed_subscription_count' => count($removedSubscriptions),
         'subscription_warnings' => $subscriptionWarnings,
-        'webhook' => $webhookResult,
-        'commands' => $app->setCommands(),
-        'seeded_channels' => [],
+        'webhook' => ['registered' => $setupWebhook],
+        'commands' => ['configured' => true, 'count' => count(gitpostedMaxCommands())],
+        'seeded_channel_count' => 0,
     ];
+    if (!$commandsConfigured) $app->setCommands();
     foreach ($seeds as $seed) {
         $chatId = trim((string) ($seed['chat_id'] ?? ''));
         if ($chatId === '') {
             continue;
         }
-        $result['seeded_channels'][] = $app->syncChannelById(
+        $app->syncChannelById(
             $chatId,
             trim((string) ($seed['owner_max_id'] ?? ''))
         );
+        ++$result['seeded_channel_count'];
     }
-    $result['subscriptions'] = $app->subscriptions();
+    $finalSubscriptions = $app->subscriptions();
+    $finalRows = $finalSubscriptions['subscriptions'] ?? (array_is_list($finalSubscriptions) ? $finalSubscriptions : null);
+    if (!is_array($finalRows)) throw new GitPostedSetupPolicyFailure('МАКС не подтвердил итоговый список webhook. Проверьте состояние перед повтором.');
+    gitpostedSetupRequireTakeover($finalRows, $webhookUrl, true);
+    $result['subscriptions'] = gitpostedSetupSafeWebhookUrls($finalRows);
 
     echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL;
 } catch (Throwable $exception) {
-    fwrite(STDERR, 'Настройка GitPosted в МАКС не выполнена: ' . $exception->getMessage() . PHP_EOL);
+    fwrite(STDERR, 'Настройка GitPosted в МАКС не выполнена: ' . gitpostedSetupSafeError($exception) . PHP_EOL);
     exit(1);
 }

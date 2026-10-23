@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/bot-commands.php';
 require_once __DIR__ . '/account.php';
 require_once __DIR__ . '/publication-plan.php';
 require_once __DIR__ . '/max-post-options.php';
@@ -1814,12 +1815,7 @@ final class GitPostedMaxBot
 
     public function setCommands(): array
     {
-        return $this->api->setCommands([
-            ['name' => 'start', 'description' => 'Запустить GitPosted'],
-            ['name' => 'menu', 'description' => 'Открыть главное меню'],
-            ['name' => 'help', 'description' => 'Открыть справку'],
-            ['name' => 'cancel', 'description' => 'Отменить текущее действие'],
-        ]);
+        return $this->api->setCommands(gitpostedMaxCommands());
     }
 
     public function removeSubscription(string $url): array

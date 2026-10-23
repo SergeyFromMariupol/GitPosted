@@ -113,6 +113,7 @@ def helper(request, timeout=45):
         safe = {'TAKEOVER_REQUIRED': 'У бота уже есть другой webhook. Подтвердите переключение.',
                 'PLATFORM_API_FAILED': 'Платформа не подтвердила запрос. Проверьте токен и доступ к API.',
                 'WEBHOOK_VERIFY_FAILED': 'Платформа не подтвердила адрес webhook.',
+                'COMMANDS_NOT_CONFIRMED': 'Платформа не подтвердила меню команд. Продолжите существующую установку.',
                 'SCHEMA_INVALID': 'Структура базы не прошла проверку.'}
         raise p.Failure(code if code in safe else 'APPLICATION_FAILED', safe.get(code, 'Приложение не подтвердило действие.'))
     return result['result']
@@ -135,6 +136,10 @@ class Broker:
             self.public = p.read_json(p.STATE / 'public.json')
         if not isinstance(self.public, dict):
             failure('STATE_UNAVAILABLE', 'Состояние установщика недоступно.')
+        # A crash can leave nginx's completed routes ahead of the terminal
+        # marker. Reopen the pending wizard from the authoritative checkpoint
+        # before accepting requests; never move the terminal marker forward.
+        p.reconcile_pending_finish(self.public)
         job = self.public.get('job', {})
         if job.get('status') == 'running':
             job['status'] = 'failed'
@@ -395,7 +400,9 @@ class Broker:
         elif step in ('telegram', 'max'):
             if not selected[step]['enabled']:
                 return 'skipped'
-            helper({'action': 'register', 'platform': step, 'takeover': selected[step]['takeover']}, timeout=90)
+            # A confirmed webhook plus localized command menus needs several
+            # bounded API calls; retain a finite budget for the entire child.
+            helper({'action': 'register', 'platform': step, 'takeover': selected[step]['takeover']}, timeout=300)
         elif step == 'verify':
             helper({'action': 'verify', 'platforms': [x for x in ('telegram', 'max') if selected[x]['enabled']]}, timeout=90)
         elif step == 'activate':
@@ -476,7 +483,11 @@ def main():
         path.unlink()
     server = Server(str(path), Handler)
     server.setup_uid = p.identity(p.SETUP_USER)[0]
-    server.broker = Broker()
+    # State recovery includes read/modify/write and nginx reconciliation.
+    # Serialize the entire startup with SSH enrollment reissue, not only
+    # the individual file writes, so a fresh link cannot be overwritten.
+    with p.installer_lock():
+        server.broker = Broker()
     os.chown(path, 0, p.identity(p.SETUP_USER)[1])
     os.chmod(path, 0o660)
     try:

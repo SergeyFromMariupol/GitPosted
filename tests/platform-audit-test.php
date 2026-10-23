@@ -2,10 +2,13 @@
 
 declare(strict_types=1);
 
+require_once dirname(__DIR__) . '/payload/src/bot-commands.php';
+
 /** Offline: extract declarations only; never execute the admin entry point. */
 $source = file_get_contents(dirname(__DIR__) . '/payload/src/control/index.php');
 $wanted = ['adminTelegramWebhookSnapshot', 'adminTelegramWebhookIsForeign', 'adminAssertTelegramWebhookAccess',
     'adminTelegramWebhookState', 'adminToggleTelegram', 'adminConfigureTelegram', 'adminBotUsername',
+    'adminConfigureTelegramCommands',
     'adminSecretInput', 'adminMaxTokenInput', 'adminMaxSubscriptionRows', 'adminAssertMaxWebhookAccess',
     'adminMaxSubscriptionCount', 'adminMaxSubscriptionIsCurrent', 'adminMaxCurrentSubscriptionCount',
     'adminCreateAndConfirmMaxSubscription', 'adminRemoveAcknowledgedMaxSubscriptions', 'adminRemoveAndConfirmMaxSubscription'];
@@ -99,6 +102,7 @@ function platformTelegramFixture(array &$calls, array &$states, string $failure 
             return ['ok' => true, 'result' => true];
         }
         if ($method === 'deleteWebhook') { $states[$token] = ['url' => '']; return ['ok' => true, 'result' => true]; }
+        if (in_array($method, ['setMyCommands', 'setChatMenuButton'], true)) return ['ok' => true, 'result' => true];
         throw new RuntimeException('Unexpected captured method');
     };
 }

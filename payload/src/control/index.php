@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/bootstrap.php';
 require_once dirname(__DIR__) . '/admin-auth-policy.php';
+require_once dirname(__DIR__) . '/bot-commands.php';
 header('X-Robots-Tag: noindex, nofollow');
 header("Content-Security-Policy: default-src 'self'; script-src 'self' https://hcaptcha.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://hcaptcha.com https://*.hcaptcha.com; img-src 'self' data:; font-src 'self'; connect-src 'self' https://hcaptcha.com https://*.hcaptcha.com; frame-src https://hcaptcha.com https://*.hcaptcha.com; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'");
 header('Referrer-Policy: no-referrer');
@@ -279,6 +280,17 @@ function adminToggleTelegram(PostedTelegram $telegram, array $config, bool $enab
     }
 }
 
+function adminConfigureTelegramCommands(PostedTelegram $telegram): void {
+    foreach (gitpostedTelegramCommandSets() as $language => $commands) {
+        $payload = ['commands' => $commands];
+        if ($language !== 'default') $payload['language_code'] = $language;
+        $result = $telegram->call('setMyCommands', $payload);
+        if (($result['result'] ?? null) !== true) throw new RuntimeException('Telegram не подтвердил меню команд.');
+    }
+    $result = $telegram->call('setChatMenuButton', ['menu_button' => ['type' => 'commands']]);
+    if (($result['result'] ?? null) !== true) throw new RuntimeException('Telegram не подтвердил кнопку меню.');
+}
+
 /** A failed cleanup of a retired token must not undo a working replacement. */
 function adminConfigureTelegram(
     PostedTelegram $telegram,
@@ -329,22 +341,30 @@ function adminConfigureTelegram(
             $exception
         );
     }
+    $commandsWarning = '';
+    try {
+        adminConfigureTelegramCommands($telegram);
+    } catch (Throwable) {
+        // The confirmed webhook and new config work together. A partial menu
+        // update cannot be rolled back to a foreign service's unknown commands.
+        $commandsWarning = ' Бот подключён, но меню команд настроено не полностью. Повторите сохранение настроек Telegram.';
+    }
     if ($tokenChanged && trim((string) ($config['bot_token'] ?? '')) !== '') {
         try {
             $oldTelegram = new PostedTelegram((string) $config['bot_token']);
             $oldMe = $oldTelegram->call('getMe');
             $oldBotId = trim((string) (($oldMe['result'] ?? [])['id'] ?? ''));
             if ($oldBotId === '' || $newBotId === '') {
-                return ' Старый webhook не изменён: идентичность прежнего бота не подтверждена.';
+                return $commandsWarning . ' Старый webhook не изменён: идентичность прежнего бота не подтверждена.';
             }
             if (!hash_equals($oldBotId, $newBotId)) {
                 adminTelegramWebhookState($oldTelegram, $config, false);
             }
         } catch (Throwable) {
-            return ' Новый бот работает. Прежний webhook не удалось проверить или отключить.';
+            return $commandsWarning . ' Новый бот работает. Прежний webhook не удалось проверить или отключить.';
         }
     }
-    return '';
+    return $commandsWarning;
 }
 
 function adminStorageTimezone(array $config, mixed $submitted): string {

@@ -69,6 +69,7 @@ $transport=static function(string $platform,string $token,string $method,string 
                 'getMe'=>['ok'=>true,'result'=>['id'=>(int)explode(':',$token,2)[0],'is_bot'=>true,'username'=>'FixtureTelegramBot','first_name'=>'Fixture']],
                 'getWebhookInfo'=>['ok'=>true,'result'=>($state['telegram']??['url'=>'','allowed_updates'=>[]])],
                 'setWebhook'=>['ok'=>true,'result'=>true],
+                'setMyCommands','setChatMenuButton'=>['ok'=>true,'result'=>true],
                 default=>throw new RuntimeException('Unexpected Telegram mutation'),
             };
             if($path==='setWebhook')$state['telegram']=['url'=>$body['url'],'allowed_updates'=>$body['allowed_updates'],'secret_hash'=>hash('sha256',$body['secret_token'])];
@@ -78,6 +79,8 @@ $transport=static function(string $platform,string $token,string $method,string 
             elseif($method==='POST'&&$path==='/subscriptions'){
                 $state['max']=array_values(array_filter($state['max']??[],static fn($r)=>$r['url']!==$body['url']));
                 $state['max'][]=['url'=>$body['url'],'update_types'=>$body['update_types'],'secret_hash'=>hash('sha256',$body['secret'])];$reply=['success'=>true];
+            }elseif($method==='PATCH'&&$path==='/me/commands'){
+                $reply=['commands'=>$body['commands']];
             }elseif($method==='DELETE'&&$path==='/subscriptions'){
                 $state['max']=array_values(array_filter($state['max']??[],static fn($r)=>$r['url']!==$body['url']));$reply=['success'=>true];
             }else throw new RuntimeException('Unexpected MAX mutation');
@@ -220,7 +223,7 @@ def run_case(name, tg, mx, repair=False):
         flags=json.loads(command(['runuser','-u','gitposted','--','env','POSTED_CONFIG_FILE='+str(config),'php','-r',validation],json.dumps({'password':password}).encode()))
         assert flags=={'password_ok':True,'telegram':tg,'max':mx,'name':dbname}
         fake=json.loads((data/'fake-api.json').read_text())
-        assert all(x['path'] in ('getMe','getWebhookInfo','setWebhook','/me','/subscriptions') for x in fake.get('calls',[]))
+        assert all(x['path'] in ('getMe','getWebhookInfo','setWebhook','setMyCommands','setChatMenuButton','/me','/subscriptions','/me/commands') for x in fake.get('calls',[]))
         if not tg:assert not any(x['platform']=='telegram' for x in fake.get('calls',[]))
         if not mx:assert not any(x['platform']=='max' for x in fake.get('calls',[]))
         status,body=session.call('start',{'settings':value},csrf);assert status==410 and body['error']['code']=='INSTALLED'
