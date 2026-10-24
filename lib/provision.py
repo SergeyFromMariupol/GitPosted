@@ -17,6 +17,7 @@ import re
 import grp
 import secrets
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -25,7 +26,7 @@ import time
 import tempfile
 from urllib.parse import urlsplit
 
-VERSION = '0.1.0-rc.6'
+VERSION = '0.1.0-rc.7'
 INSTALL = Path('/opt/gitposted-installer')
 APP = Path('/opt/gitposted')
 STATE = Path('/var/lib/gitposted-installer')
@@ -49,6 +50,11 @@ class Failure(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+class BootstrapInterrupted(BaseException):
+    """CLI cancellation must bypass normal validation, retries and remapping."""
+    code = 'BOOTSTRAP_INTERRUPTED'
 
 
 _coinstall_spec = importlib.util.spec_from_file_location('gitposted_coinstall', Path(__file__).with_name('coinstall.py'))
@@ -99,17 +105,49 @@ def verify_passive_apache_stub():
 
 def run(argv, *, data=None, timeout=120, safe='Команда системы не выполнена.', capture=True):
     """Never include stdin, raw stderr or argv in raised errors."""
+    child = None
+    communicated = False
     try:
-        p = subprocess.run([str(x) for x in argv], input=data, capture_output=capture,
-                           timeout=timeout, check=False,
-                           env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive', 'LC_ALL': 'C.UTF-8'})
+        child = subprocess.Popen([str(x) for x in argv], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE if capture else None,
+                                 stderr=subprocess.PIPE if capture else None,
+                                 start_new_session=True,
+                                 env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive',
+                                      'LC_ALL': 'C.UTF-8', 'NEEDRESTART_MODE': 'l'})
+        try:
+            output, _ = child.communicate(input=data, timeout=timeout)
+            communicated = True
+        except subprocess.TimeoutExpired:
+            # apt/runuser can leave dpkg or helpers behind. End this private
+            # process group before releasing the operation's shared lock.
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.communicate(timeout=5)
+            raise Failure('SYSTEM_COMMAND_FAILED', safe) from None
     except (OSError, subprocess.TimeoutExpired):
         raise Failure('SYSTEM_COMMAND_FAILED', safe) from None
-    if p.returncode:
+    finally:
+        if child is not None:
+            if not communicated or child.returncode:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if child.poll() is None:
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+            for stream in (child.stdin, child.stdout, child.stderr):
+                if stream is not None:
+                    stream.close()
+    if child.returncode:
         error = Failure('SYSTEM_COMMAND_FAILED', safe)
-        error.command_returncode = p.returncode  # Bounded internal classification, never raw output.
+        error.command_returncode = child.returncode  # Bounded classification, never raw output.
         raise error
-    return p.stdout if capture else b''
+    return output if capture else b''
 
 
 def identity(name):
@@ -726,14 +764,26 @@ def renew_certificates():
         hosts = list(dict.fromkeys([host_name(public['host']),
                                    host_name(public.get('site_host', public['host'])),
                                    *[host_name(host) for host in public.get('acme_hosts', [])]]))
+        failed = []
         for host in hosts:
-            if not renewal_config_exists(host):
-                if host in {public['host'], public.get('site_host', public['host'])}:
-                    raise Failure('TLS_STATE', 'Отсутствует настройка продления действующего HTTPS-адреса. Проверьте сертификаты этой установки.')
-                continue  # A reserved candidate may never have passed issuance.
-            run([CERTBOT, 'renew', '--quiet', '--no-random-sleep-on-renew', '--cert-name', cert_name(host),
-                 '--deploy-hook', 'systemctl reload nginx'], timeout=600,
-                safe='Не удалось продлить сертификат этой установки. Проверьте DNS доменов и доступность HTTP.')
+            try:
+                if not renewal_config_exists(host):
+                    if host in {public['host'], public.get('site_host', public['host'])}:
+                        raise Failure('TLS_STATE', 'Отсутствует настройка продления действующего HTTPS-адреса.')
+                    continue  # A reserved candidate may never have passed issuance.
+                run([CERTBOT, 'renew', '--quiet', '--no-random-sleep-on-renew', '--cert-name', cert_name(host),
+                     '--deploy-hook', 'systemctl reload nginx'], timeout=600,
+                    safe='Не удалось продлить сертификат этой установки.')
+            except Failure as error:
+                # One retired/broken hostname must not starve the current site.
+                # Never execute Certbot for a config whose metadata was rejected.
+                if error.code == 'BOOTSTRAP_INTERRUPTED':
+                    raise  # Explicit CLI cancellation must stop subsequent work.
+                failed.append(error.code)
+        if failed:
+            code = 'UNSAFE_PATH' if any(value in {'UNSAFE_PATH', 'UNTRUSTED_PEER', 'STATE_CONFLICT'} for value in failed) \
+                else 'TLS_STATE' if all(value == 'TLS_STATE' for value in failed) else 'TLS_RENEW_FAILED'
+            raise Failure(code, 'Не все сертификаты удалось проверить или продлить. Остальные допустимые сертификаты обработаны; проверьте настройки HTTPS, DNS и доступность HTTP.')
 
 
 
@@ -1067,7 +1117,7 @@ def add_shared_packages(missing, installed):
         if shared_package_inventory() != installed:
             raise Failure('SHARED_STACK_CHANGED', 'Список пакетов изменился во время проверки. Повторите установку после завершения других операций APT.')
         run(command + ['-y', '-qq'], timeout=1200,
-            safe='Не удалось добавить безопасные зависимости второго проекта. Пакеты первого проекта закреплены; повторите --resume.')
+            safe='Не удалось добавить зависимости второго проекта. Повторите --resume для проверки; незавершённую настройку APT/dpkg потребуется завершить отдельным обслуживанием.')
 
 
 
@@ -1146,6 +1196,35 @@ def install(source, ip, host, resume=False, checked=False, package=None, shared_
     show_link(host, code)
 
 
+@contextmanager
+def interruption_signals():
+    """Unwind CLI package children before releasing a shared host lease."""
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    watched = [signal.SIGTERM]
+    if hasattr(signal, 'SIGHUP'):
+        watched.append(signal.SIGHUP)
+    previous = {number: signal.getsignal(number) for number in watched}
+    interrupted = False
+
+    def interrupted_cli(_number, _frame):
+        nonlocal interrupted
+        if interrupted:
+            return  # Repeated signals must not interrupt process-group cleanup.
+        interrupted = True
+        raise BootstrapInterrupted('Подготовка прервана. После проверки состояния пакетов продолжите установку с --resume.')
+
+    try:
+        for number in watched:
+            signal.signal(number, interrupted_cli)
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
 def main():
     parser = argparse.ArgumentParser(description='GitPosted clean Ubuntu 24.04 installer')
     parser.add_argument('--public-ip')
@@ -1155,16 +1234,17 @@ def main():
     parser.add_argument('--renew-certificates', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:
-        if os.geteuid() != 0:
-            raise Failure('ROOT_REQUIRED', 'Запустите установщик через sudo.')
-        if args.renew_certificates:
-            if args.host or args.public_ip or args.resume or args.dry_run:
-                raise Failure('INVALID_ARGUMENTS', 'Продление сертификатов запускается без параметров установки.')
-            renew_certificates()
-            return
-        with shared_lock(create=not args.dry_run):
-            bootstrap_main(args)
-    except Failure as error:
+        with interruption_signals():
+            if os.geteuid() != 0:
+                raise Failure('ROOT_REQUIRED', 'Запустите установщик через sudo.')
+            if args.renew_certificates:
+                if args.host or args.public_ip or args.resume or args.dry_run:
+                    raise Failure('INVALID_ARGUMENTS', 'Продление сертификатов запускается без параметров установки.')
+                renew_certificates()
+                return
+            with shared_lock(create=not args.dry_run):
+                bootstrap_main(args)
+    except (Failure, BootstrapInterrupted) as error:
         print(error.code + ': ' + str(error), file=sys.stderr)
         sys.exit(1)
 
