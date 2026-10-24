@@ -21,7 +21,6 @@ if (!in_array($method, ['GET', 'HEAD'], true)) {
 }
 
 header('Content-Type: text/html; charset=utf-8');
-header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; img-src 'self' data:; font-src 'self' https://fonts.gstatic.com; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'");
 header('Referrer-Policy: strict-origin-when-cross-origin');
 header('Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()');
 header('X-Content-Type-Options: nosniff');
@@ -39,9 +38,74 @@ $maxBotUrl = is_string($publicBotLinks['max'] ?? null)
     ? $publicBotLinks['max']
     : null;
 $ctaPresentation = [
-    'label' => 'Начать бесплатно',
-    'note' => 'Все возможности доступны бесплатно.',
+    'label' => 'Открыть бота',
+    'note' => 'Выберите Telegram или МАКС.',
 ];
+$projectRepository = 'https://github.com/SergeyFromMariupol/GitPosted';
+$seoTitle = 'GitPosted — бесплатный бот для постинга в Telegram и МАКС';
+$seoDescription = 'Бесплатная альтернатива Posted (@posted): отложенный постинг в Telegram и МАКС, серии, дубликаты, закреп и удаление. Открытый код на GitHub, установка на свой сервер без платы за каждый канал.';
+$faqItems = [
+    [
+        'question' => 'GitPosted — бесплатная альтернатива Posted (@posted)?',
+        'answer' => 'Да, если вам нужен бот для создания и отложенного постинга на своём сервере. GitPosted — самостоятельный проект с открытым кодом, не связанный с сервисом Posted. Доступны публикации в Telegram и МАКС, медиа, расписание, серии и репосты.',
+    ],
+    [
+        'question' => 'За что нужно платить?',
+        'answer' => 'Код GitPosted доступен бесплатно по лицензии MIT. Подписки на программу и лицензионной платы за каждый канал нет. При самостоятельной установке вы оплачиваете выбранный сервер и, при необходимости, домен. Стоимость зависит от вашего хостинга.',
+    ],
+    [
+        'question' => 'Есть ли ограничения на каналы и публикации?',
+        'answer' => 'В собственной установке нет лицензионной тарификации по числу каналов: вы сами управляете доступом и настройками. Производительность зависит от сервера; действуют технические ограничения проекта, Telegram и МАКС, включая размеры файлов, частоту запросов и права ботов.',
+    ],
+    [
+        'question' => 'Можно пользоваться самому и делиться с друзьями?',
+        'answer' => 'Да. Можно развернуть GitPosted для своих каналов, команды или друзей, изучать и изменять код с соблюдением лицензии MIT. В репозитории GitHub есть установщик, описание возможностей и инструкции по настройке собственных ботов.',
+    ],
+    [
+        'question' => 'Как автоматически пересылать посты между Telegram и МАКС?',
+        'answer' => 'Для автоматической пересылки новых публикаций из канала в канал есть отдельный бесплатный проект GitRePosted. GitPosted помогает подготовить и запланировать пост; GitRePosted передаёт новые публикации по настроенным маршрутам между Telegram и МАКС.',
+    ],
+];
+$structuredData = json_encode([
+    '@context' => 'https://schema.org',
+    '@graph' => [
+        [
+            '@type' => 'WebSite',
+            '@id' => $siteBaseUrl . '/#website',
+            'url' => $siteBaseUrl . '/',
+            'name' => 'GitPosted',
+            'inLanguage' => 'ru-RU',
+            'description' => $seoDescription,
+        ],
+        [
+            '@type' => ['SoftwareApplication', 'SoftwareSourceCode'],
+            '@id' => $siteBaseUrl . '/#software',
+            'name' => 'GitPosted',
+            'url' => $siteBaseUrl . '/',
+            'description' => $seoDescription,
+            'applicationCategory' => 'BusinessApplication',
+            'operatingSystem' => 'Ubuntu Server 24.04',
+            'isAccessibleForFree' => true,
+            'license' => $projectRepository . '/blob/main/LICENSE',
+            'downloadUrl' => $projectRepository,
+            'codeRepository' => $projectRepository,
+            'offers' => ['@type' => 'Offer', 'price' => '0', 'priceCurrency' => 'RUB'],
+            'featureList' => ['Отложенный постинг в Telegram и МАКС', 'Серии и дубликаты публикаций', 'Закреп и автоматическое удаление', 'Копии и репосты', 'Установка на свой сервер'],
+        ],
+        [
+            '@type' => 'FAQPage',
+            '@id' => $siteBaseUrl . '/#faq',
+            'mainEntity' => array_map(static fn (array $item): array => [
+                '@type' => 'Question',
+                'name' => $item['question'],
+                'acceptedAnswer' => ['@type' => 'Answer', 'text' => $item['answer']],
+            ], $faqItems),
+        ],
+    ],
+], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_THROW_ON_ERROR);
+$structuredDataHash = base64_encode(hash('sha256', $structuredData, true));
+header("Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-" . $structuredDataHash . "'; style-src 'self' https://fonts.googleapis.com; img-src 'self' data:; font-src 'self' https://fonts.gstatic.com; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'");
+
 $publicStats = gitpostedPublicStats();
 $statText = static fn (string $key): string => $publicStats['live'] && is_int($publicStats[$key])
     ? number_format($publicStats[$key], 0, '.', ' ')
@@ -79,25 +143,27 @@ $renderPlatformCta = static function (string $modifier = '') use (
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-    <meta name="description" content="GitPosted — бот для создания, оформления и отложенной публикации постов в Telegram и МАКС с медиа, кнопками и автоматизацией.">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="<?= htmlspecialchars($seoDescription, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
+    <meta name="robots" content="index, follow, max-image-preview:large">
     <meta name="theme-color" content="#1c1c1e">
     <meta property="og:type" content="website">
     <meta property="og:locale" content="ru_RU">
-    <meta property="og:title" content="GitPosted | Бот для постинга">
-    <meta property="og:description" content="Создавайте публикации и выпускайте их в Telegram и МАКС точно по расписанию.">
+    <meta property="og:title" content="<?= htmlspecialchars($seoTitle, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
+    <meta property="og:description" content="<?= htmlspecialchars($seoDescription, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
     <meta property="og:url" content="<?= htmlspecialchars($siteBaseUrl . '/', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
     <meta property="og:image" content="<?= htmlspecialchars($siteBaseUrl . '/assets/promo/og.png', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
     <meta property="og:image:width" content="1536">
     <meta property="og:image:height" content="1024">
-    <meta property="og:image:alt" content="GitPosted — бот для отложенного постинга в Telegram и МАКС">
+    <meta property="og:image:alt" content="GitPosted — бесплатный постинг в Telegram и МАКС с открытым кодом">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="GitPosted | Бот для постинга">
-    <meta name="twitter:description" content="Создавайте публикации и выпускайте их в Telegram и МАКС точно по расписанию.">
+    <meta name="twitter:title" content="<?= htmlspecialchars($seoTitle, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
+    <meta name="twitter:description" content="<?= htmlspecialchars($seoDescription, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
     <meta name="twitter:image" content="<?= htmlspecialchars($siteBaseUrl . '/assets/promo/og.png', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
     <link rel="canonical" href="<?= htmlspecialchars($siteBaseUrl . '/', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
-    <link rel="stylesheet" href="/assets/promo/styles.css?v=20260801-1">
-    <title>GitPosted | Бот для постинга</title>
+    <link rel="stylesheet" href="/assets/promo/styles.css?v=20261024-open-source">
+    <title><?= htmlspecialchars($seoTitle, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></title>
+    <script type="application/ld+json"><?= $structuredData ?></script>
 </head>
 <body>
 
@@ -112,6 +178,8 @@ $renderPlatformCta = static function (string $modifier = '') use (
             <a href="#triggers" class="burger-menu__link">Наши преимущества</a>
             <a href="#free" class="burger-menu__link">Бесплатно</a>
             <a href="#opinions" class="burger-menu__link">Возможности</a>
+            <a href="#faq" class="burger-menu__link">Вопросы и ответы</a>
+            <a href="<?= htmlspecialchars($projectRepository, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" class="burger-menu__link" target="_blank" rel="noopener noreferrer">GitHub и установка</a>
         </div>
     </div>
 </div>
@@ -147,7 +215,8 @@ $renderPlatformCta = static function (string $modifier = '') use (
         </nav>
 
         <div class="header__content">
-            <h1 class="header__title">Бот для отложенного постинга в Telegram и МАКС</h1>
+            <p class="project-eyebrow">Открытый код · Свой сервер · Без платы за каждый канал</p>
+            <h1 class="header__title">Бесплатный бот для постинга в Telegram и МАКС</h1>
             <p class="header__text">
                 <?php if ($telegramBotUrl !== null): ?>
                     <a href="<?= htmlspecialchars($telegramBotUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer">GitPosted</a>
@@ -155,9 +224,14 @@ $renderPlatformCta = static function (string $modifier = '') use (
                     <span>GitPosted</span>
                 <?php endif; ?>
                 —
-                удобный бот для двух платформ. Создавайте уникальный контент,
-                публикуйте его точно в нужное время, а в Telegram используйте анимированные эмодзи.
+                создавайте посты, планируйте время выхода, серии, закреп и удаление.
+                Установите проект на свой сервер для себя и друзей. Код бесплатный;
+                сервер и необязательный домен вы оплачиваете самостоятельно.
             </p>
+            <div class="project-actions">
+                <a class="project-button" href="<?= htmlspecialchars($projectRepository, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer">Скачать и установить с GitHub <span aria-hidden="true">↗</span></a>
+                <a class="project-text-link" href="#free">Как это работает</a>
+            </div>
             <?php $renderPlatformCta('platform-cta_header'); ?>
         </div>
         <span id="about-bot" class="anchor-target"></span>
@@ -226,9 +300,11 @@ $renderPlatformCta = static function (string $modifier = '') use (
 <section class="free-access">
     <div class="container free-access__container">
         <div class="free-access__copy">
-            <div class="free-access__kicker">Бесплатно для всех</div>
-            <h2 class="free-access__title">Весь <span>GitPosted</span> без оплаты</h2>
-            <p class="free-access__text">Все возможности Telegram- и МАКС-ботов доступны бесплатно: публикации, расписание, медиа, редакторы, повтор и автоматическое удаление.</p>
+            <div class="free-access__kicker">Бесплатный проект по лицензии MIT</div>
+            <h2 class="free-access__title">Один сервер.<br>Ваши <span>каналы.</span></h2>
+            <p class="free-access__text">GitPosted не требует подписки на программу или лицензионной оплаты за каждый канал. Размещайте ботов на своём сервере и управляйте публикациями для себя, команды и друзей.</p>
+            <p class="free-access__text">На GitHub опубликованы исходный код, установщик для чистого Ubuntu Server, описание возможностей и инструкции для собственных Telegram- и МАКС-ботов. Оплачивается выбранный вами хостинг; ресурсы сервера и ограничения платформ учитываются при работе.</p>
+            <a class="project-text-link" href="<?= htmlspecialchars($projectRepository, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer">Исходники и инструкция на GitHub ↗</a>
         </div>
         <?php $renderPlatformCta('platform-cta_free'); ?>
     </div>
@@ -264,7 +340,7 @@ $renderPlatformCta = static function (string $modifier = '') use (
                         <span class="opinion-author__link">Публикации по расписанию</span>
                     </div>
                 </div>
-                <p class="opinion__text">Подготовьте публикации на неделю или месяц вперед. GitPosted выпустит каждую запись в выбранный день и время.</p>
+                <p class="opinion__text">Подготовьте публикации на неделю или месяц вперёд. Задайте период серии, шаг или отдельные даты; создайте дубликаты с собственным временем, закрепом и удалением.</p>
             </article>
             <article class="opinion">
                 <div class="opinion-author">
@@ -274,7 +350,7 @@ $renderPlatformCta = static function (string $modifier = '') use (
                         <span class="opinion-author__link">Оформление текста и кнопок</span>
                     </div>
                 </div>
-                <p class="opinion__text">Добавляйте анимированные эмодзи в публикации и в подпи кнопок, выбирайте их цвет и сохраняйте оформление Telegram.</p>
+                <p class="opinion__text">Добавляйте анимированные эмодзи в Telegram-публикации и подписи кнопок, сохраняйте оформление постов.</p>
             </article>
         </div>
         <div class="opinions__inner">
@@ -312,9 +388,46 @@ $renderPlatformCta = static function (string $modifier = '') use (
     </div>
 </section>
 
+<section class="project-family" aria-labelledby="family-title">
+    <div class="container">
+        <p class="project-eyebrow">Два бесплатных проекта</p>
+        <h2 id="family-title" class="project-section-title">Планируйте здесь.<br>Пересылайте с GitRePosted.</h2>
+        <div class="project-cards">
+            <article class="project-card">
+                <span class="project-card__tag">Подготовка и расписание</span>
+                <h3>GitPosted</h3>
+                <p>Создавайте и оформляйте посты для Telegram и МАКС. Планируйте разовые публикации, серии и дубликаты, настраивайте закреп, удаление и режим копии или репоста.</p>
+                <a class="project-text-link" href="<?= htmlspecialchars($projectRepository, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer">GitPosted на GitHub ↗</a>
+            </article>
+            <article class="project-card">
+                <span class="project-card__tag">Автоматическая пересылка</span>
+                <h3>GitRePosted</h3>
+                <p>Передавайте новые публикации из канала в канал по своим маршрутам между Telegram и МАКС. Подключайте собственных ботов и выбирайте доступные вам источники и получателей.</p>
+                <div class="project-card__links"><a class="project-text-link" href="https://gitreposted.ru/">Подробнее о GitRePosted ↗</a><a class="project-text-link" href="https://github.com/SergeyFromMariupol/GitRePosted" target="_blank" rel="noopener noreferrer">GitHub ↗</a></div>
+            </article>
+        </div>
+    </div>
+</section>
+
+<section class="project-faq" id="faq" aria-labelledby="faq-title">
+    <div class="container">
+        <p class="project-eyebrow">О бесплатном постинге</p>
+        <h2 id="faq-title" class="project-section-title">Вопросы перед установкой</h2>
+        <div class="project-faq__items">
+            <?php foreach ($faqItems as $item): ?>
+                <details class="project-faq__item">
+                    <summary><?= htmlspecialchars($item['question'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></summary>
+                    <p><?= htmlspecialchars($item['answer'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></p>
+                </details>
+            <?php endforeach; ?>
+        </div>
+    </div>
+</section>
+
 <section class="start">
     <div class="container">
-        <h2 class="start__title">Начните работу с нами прямо сейчас</h2>
+        <h2 class="start__title">Ваши боты.<br>Ваш сервер. Ваши публикации.</h2>
+        <div class="project-actions project-actions_center"><a class="project-button" href="<?= htmlspecialchars($projectRepository, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer">Установить GitPosted с GitHub ↗</a></div>
         <?php $renderPlatformCta('platform-cta_center platform-cta_final'); ?>
     </div>
 </section>
@@ -329,6 +442,8 @@ $renderPlatformCta = static function (string $modifier = '') use (
             <a href="#opinions" class="footer__anchor">Возможности</a>
         </div>
         <div class="footer__links footer__links_legal">
+            <a href="<?= htmlspecialchars($projectRepository, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer" class="footer__link">GitHub</a>
+            <a href="#faq" class="footer__link">Вопросы и ответы</a>
             <a href="/user-agreement/" class="footer__link">Соглашение</a>
             <a href="/privacy/" class="footer__link">Конфиденциальность</a>
             <?php if ($maxBotUrl !== null): ?>

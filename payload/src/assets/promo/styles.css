@@ -71,3 +71,50 @@ body.menu-open{overflow:hidden}
     .platform-cta__button{transition:none}
     .platform-cta__button:not(.platform-cta__button_disabled):hover{transform:none}
 }
+
+/* Open-source project presentation. */
+.header{height:auto;min-height:100svh;padding-bottom:80px}
+.header__content{max-width:980px}
+.header__text{max-width:650px}
+.project-eyebrow{margin:0 0 18px;color:#f8bc00;font-size:12px;font-weight:700;line-height:1.6;letter-spacing:.12em;text-transform:uppercase}
+.project-actions{display:flex;align-items:center;flex-wrap:wrap;gap:18px 26px;margin:0 0 28px}
+.project-actions_center{justify-content:center;margin-bottom:32px}
+.project-button{display:inline-flex;align-items:center;justify-content:center;gap:20px;min-height:60px;padding:17px 25px;border:1px solid #f8bc00;border-radius:18px;background:#f8bc00;color:#1c1c1e;font-size:16px;font-weight:700;line-height:1.4;text-align:center;transition:background-color .2s ease}
+.project-button:hover{background:#ffda54}
+.project-text-link{display:inline-block;color:#f8bc00;font-size:15px;font-weight:600;line-height:1.6;text-decoration:underline;text-underline-offset:5px}
+.project-text-link:hover{color:#ffda54}
+.project-button:focus-visible,.project-text-link:focus-visible,.project-faq__item summary:focus-visible{outline:3px solid #f8bc00;outline-offset:5px}
+.free-access .project-text-link{margin-top:24px}
+.project-section-title{text-align:left;max-width:1000px;font-size:48px;line-height:1.2;margin-bottom:45px}
+.project-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:26px}
+.project-card{min-width:0;padding:38px;border:1px solid #454548;border-radius:26px;background:#242426}
+.project-card__tag{display:block;margin-bottom:20px;color:#f8bc00;font-size:12px;font-weight:600;line-height:1.6;text-transform:uppercase;letter-spacing:.08em}
+.project-card h3{text-align:left;margin:0 0 16px;font-size:29px}
+.project-card p{margin-bottom:26px;color:#c4c4c7;font-size:17px;line-height:1.7}
+.project-card__links{display:flex;align-items:center;flex-wrap:wrap;gap:14px 28px}
+.project-faq__items{border-top:1px solid #454548}
+.project-faq__item{border-bottom:1px solid #454548;padding:25px 0}
+.project-faq__item summary{position:relative;padding-right:45px;cursor:pointer;list-style:none;font-size:21px;font-weight:600;line-height:1.5}
+.project-faq__item summary::-webkit-details-marker{display:none}
+.project-faq__item summary::after{content:'+';position:absolute;right:4px;top:0;color:#f8bc00;font-size:29px;font-weight:400;line-height:1}
+.project-faq__item[open] summary::after{content:'−'}
+.project-faq__item p{max-width:1000px;margin-top:18px;color:#c4c4c7;font-size:17px;line-height:1.75}
+@media screen and (max-width:1280px){
+    .header{min-height:0;padding-bottom:0}
+    .project-eyebrow{font-size:10px;letter-spacing:.08em;margin-bottom:14px}
+    .project-actions{align-items:stretch;gap:14px;margin-bottom:25px}
+    .project-button{width:100%;min-height:54px;padding:14px;font-size:13px;border-radius:16px;gap:10px}
+    .project-text-link{font-size:13px}
+    .project-section-title{font-size:29px;margin-bottom:26px}
+    .project-cards{grid-template-columns:1fr;gap:18px}
+    .project-card{padding:24px;border-radius:22px}
+    .project-card__tag{font-size:10px;margin-bottom:15px}
+    .project-card h3{font-size:23px}
+    .project-card p,.project-faq__item p{font-size:14px}
+    .project-card__links{gap:12px}
+    .project-faq__item{padding:20px 0}
+    .project-faq__item summary{font-size:16px;padding-right:26px}
+    .project-faq__item summary::after{font-size:24px}
+    .burger-menu{overflow-y:auto}
+}
+@media (prefers-reduced-motion:reduce){.project-button{transition:none}}
