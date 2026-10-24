@@ -11,18 +11,31 @@
         return match ? match[1] : null;
     }
 
+    function installerPath(pathname) {
+        return pathname === '/GitPosted/install/' ? '/GitPosted/install/' : pathname === '/install/' ? '/install/' : null;
+    }
+
     // A fragment never reaches the HTTP request. Remove it before any API call.
     let enrollmentCode = root.location ? setupCodeFromFragment(root.location.hash) : null;
     let invalidSetupLink = Boolean(root.location && root.location.hash && !enrollmentCode);
     if (root.location && root.location.hash) {
-        try { root.history.replaceState(null, '', '/install/'); }
+        try {
+            const cleanPath = installerPath(root.location.pathname);
+            if (!cleanPath) throw new Error('Invalid installer path');
+            root.history.replaceState(null, '', cleanPath);
+        }
         catch (_) { enrollmentCode = null; invalidSetupLink = true; }
     }
 
     function safeHttpsUrl(value, suffix) {
         try {
-            const url = new URL(String(value));
+            const text = String(value);
+            if (/[\x00-\x20\x7f\\]/.test(text) || /\/(?:\.|%2e){1,2}(?:\/|%2f|$)/i.test(text)) return null;
+            const url = new URL(text);
             if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return null;
+            const mount = url.pathname.replace(/\/$/, '');
+            if (suffix && !['', '/GitPosted'].includes(mount)) return null;
+            if (!suffix && !['', '/GitPosted', '/control', '/GitPosted/control'].includes(mount)) return null;
             if (suffix) url.pathname = url.pathname.replace(/\/+$/, '') + '/' + suffix.replace(/^\/+/, '');
             return url.href;
         } catch (_) {
@@ -128,7 +141,7 @@
         return errors;
     }
 
-    const helpers = { safeHttpsUrl, visibleWebhookUrl, foreignWebhookUrls, normalizedJob, buildSettings, validateSettings, setupCodeFromFragment };
+    const helpers = { safeHttpsUrl, visibleWebhookUrl, foreignWebhookUrls, normalizedJob, buildSettings, validateSettings, setupCodeFromFragment, installerPath };
     if (typeof module !== 'undefined' && module.exports) module.exports = helpers;
     if (!root.document) return;
 

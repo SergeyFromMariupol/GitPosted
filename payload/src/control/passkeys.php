@@ -9,8 +9,9 @@ header('Cache-Control: no-store, private');
 header('X-Content-Type-Options: nosniff');
 header('X-Robots-Tag: noindex, nofollow');
 
+$config = PostedConfig::get();
 session_name('posted_admin');
-session_set_cookie_params(['lifetime'=>0,'path'=>'/control/','secure'=>true,'httponly'=>true,'samesite'=>'Strict']);
+session_set_cookie_params(['lifetime'=>0,'path'=>gitpostedAppPath($config, '/control/'),'secure'=>true,'httponly'=>true,'samesite'=>'Strict']);
 session_start();
 
 function reply(array $data, int $status = 200): never
@@ -289,7 +290,7 @@ try {
     if ($path === 'auth/verify' && $method === 'POST') {
         verifyAndUsePasskey($pdo, body());
         authorize();
-        reply(['ok' => true, 'redirect' => '/control/?page=overview']);
+        reply(['ok' => true, 'redirect' => gitpostedAppPath($config, '/control/?page=overview')]);
     }
 
     if (!$authorized) fail('Требуется вход в панель.', 401);

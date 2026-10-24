@@ -30,6 +30,7 @@ try {
         . 'echo json_encode(["capabilities"=>$cap,"status"=>$status,"site"=>$site]);');
     $cases = [
         ['https://installer.example', true, 'installer.example'],
+        ['https://installer.example/GitPosted', true, 'installer.example'],
         ['https://INSTALLER.EXAMPLE:443', true, 'installer.example'],
         ['https://installer.example:8443', true, 'installer.example'],
         ['https://8.8.8.8', false, null],

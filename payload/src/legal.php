@@ -7,6 +7,7 @@ require_once __DIR__ . '/bootstrap.php';
 function gitpostedLegalPage(string $documentKey): never
 {
     $config = PostedConfig::get();
+    $legalPath = static fn(string $path): string => htmlspecialchars(gitpostedAppPath($config, $path), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     $supportUsername = ltrim((string) ($config['service_admin_username'] ?? ''), '@');
     $supportHandle = preg_match('/^[A-Za-z0-9_]{5,32}$/D', $supportUsername) === 1
         ? '@' . $supportUsername : 'контакт владельца пока не указан';
@@ -107,7 +108,7 @@ function gitpostedLegalPage(string $documentKey): never
                     'Применяются разграничение доступа, защищённое соединение, хранение секретов вне публичной части сайта и другие разумные организационные и технические меры.',
                 ]],
                 ['title' => '7. Cookies и сайт', 'paragraphs' => [
-                    'Публичная главная страница не использует рекламные и аналитические cookies. В закрытом разделе /control/ применяется защищённая сессионная cookie для административной авторизации.',
+                    'Публичная главная страница не использует рекламные и аналитические cookies. В закрытом разделе ' . gitpostedAppPath($config, '/control/') . ' применяется защищённая сессионная cookie для административной авторизации.',
                 ]],
                 ['title' => '8. Права пользователя', 'items' => [
                     'Запросить сведения о связанных с ним данных, их исправление или удаление в допустимом объёме.',
@@ -143,19 +144,19 @@ function gitpostedLegalPage(string $documentKey): never
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="<?= $escape($document['description']) ?>">
     <meta name="theme-color" content="#07111f">
-    <link rel="stylesheet" href="/assets/site.css">
+    <link rel="stylesheet" href="<?= $legalPath('/assets/site.css') ?>">
     <title><?= $escape($document['title']) ?> — GitPosted</title>
 </head>
 <body class="legal-page">
 <header class="site-header">
     <div class="wrap header-inner">
-        <a class="brand" href="/" aria-label="GitPosted — главная"><span class="brand-mark" aria-hidden="true">✓</span><span>GitPosted</span></a>
+        <a class="brand" href="<?= $legalPath('/') ?>" aria-label="GitPosted — главная"><span class="brand-mark" aria-hidden="true">✓</span><span>GitPosted</span></a>
         <?php if ($botUrl !== null): ?><a class="button button-small" href="<?= htmlspecialchars($botUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer">Открыть бота</a><?php endif; ?>
     </div>
 </header>
 <main class="legal-main">
     <div class="wrap">
-        <a class="legal-back" href="/">← На главную</a>
+        <a class="legal-back" href="<?= $legalPath('/') ?>">← На главную</a>
         <div class="legal-heading">
             <p class="eyebrow dark"><span></span> Правовая информация</p>
             <h1><?= $escape($document['title']) ?></h1>
@@ -182,7 +183,7 @@ function gitpostedLegalPage(string $documentKey): never
 <footer class="site-footer legal-footer">
     <div class="wrap footer-grid">
         <div><span class="brand"><span class="brand-mark" aria-hidden="true">✓</span><span>GitPosted</span></span><p>Боты для создания и планирования публикаций в Telegram и МАКС.</p></div>
-        <nav aria-label="Правовая информация"><a href="/user-agreement/">Пользовательское соглашение</a><a href="/privacy/">Конфиденциальность</a></nav>
+        <nav aria-label="Правовая информация"><a href="<?= $legalPath('/user-agreement/') ?>">Пользовательское соглашение</a><a href="<?= $legalPath('/privacy/') ?>">Конфиденциальность</a></nav>
         <p class="footer-meta">Связь: <?= htmlspecialchars($supportHandle, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?><br>© 2026 GitPosted</p>
     </div>
 </footer>

@@ -2,16 +2,21 @@
 
 declare(strict_types=1);
 
+require __DIR__ . '/public-site.php';
+$siteConfig = PostedConfig::get();
+$siteBaseUrl = rtrim((string) ($siteConfig['base_url'] ?? 'https://example.com'), '/');
+$sitePath = static fn(string $path): string => htmlspecialchars(gitpostedAppPath($siteConfig, $path), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
 $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
 $requestPath = parse_url((string) ($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH);
 $requestPath = is_string($requestPath) ? $requestPath : '/';
 
 if ($method === 'POST') {
-    header('Location: /control/', true, 307);
+    header('Location: ' . gitpostedAppPath($siteConfig, '/control/'), true, 307);
     exit;
 }
-if ($requestPath === '/index.php') {
-    header('Location: /control/', true, 308);
+if ($requestPath === gitpostedAppPath($siteConfig, '/index.php')) {
+    header('Location: ' . gitpostedAppPath($siteConfig, '/control/'), true, 308);
     exit;
 }
 if (!in_array($method, ['GET', 'HEAD'], true)) {
@@ -26,10 +31,6 @@ header('Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
 header('X-Content-Type-Options: nosniff');
 header('Cache-Control: no-cache, must-revalidate');
 
-require __DIR__ . '/public-site.php';
-
-$siteConfig = PostedConfig::get();
-$siteBaseUrl = rtrim((string) ($siteConfig['base_url'] ?? 'https://example.com'), '/');
 $publicBotLinks = gitpostedPublicBotLinks();
 $telegramBotUrl = is_string($publicBotLinks['telegram'] ?? null)
     ? $publicBotLinks['telegram']
@@ -161,7 +162,7 @@ $renderPlatformCta = static function (string $modifier = '') use (
     <meta name="twitter:description" content="<?= htmlspecialchars($seoDescription, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
     <meta name="twitter:image" content="<?= htmlspecialchars($siteBaseUrl . '/assets/promo/og.png', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
     <link rel="canonical" href="<?= htmlspecialchars($siteBaseUrl . '/', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>">
-    <link rel="stylesheet" href="/assets/promo/styles.css?v=20261024-open-source">
+    <link rel="stylesheet" href="<?= $sitePath('/assets/promo/styles.css?v=20261024-open-source') ?>">
     <title><?= htmlspecialchars($seoTitle, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?></title>
     <script type="application/ld+json"><?= $structuredData ?></script>
 </head>
@@ -171,7 +172,7 @@ $renderPlatformCta = static function (string $modifier = '') use (
     <div class="burger__back"></div>
     <div class="burger-menu" role="dialog" aria-label="Навигация">
         <button class="burger-menu__cross" type="button" aria-label="Закрыть меню">
-            <img src="/assets/promo/cross.svg" alt="">
+            <img src="<?= $sitePath('/assets/promo/cross.svg') ?>" alt="">
         </button>
         <div class="burger-menu__links">
             <a href="#about-bot" class="burger-menu__link">О боте</a>
@@ -185,10 +186,10 @@ $renderPlatformCta = static function (string $modifier = '') use (
 </div>
 
 <header class="header">
-    <img src="/assets/promo/image.svg" alt="" class="header__image">
+    <img src="<?= $sitePath('/assets/promo/image.svg') ?>" alt="" class="header__image">
     <div class="container container_header">
         <nav class="nav" aria-label="Основная навигация">
-            <a class="nav__brand" href="/" aria-label="GitPosted — главная">
+            <a class="nav__brand" href="<?= $sitePath('/') ?>" aria-label="GitPosted — главная">
                 <span class="nav__brand-mark" aria-hidden="true">✓</span>
                 <span>GitPosted</span>
             </a>
@@ -202,7 +203,7 @@ $renderPlatformCta = static function (string $modifier = '') use (
                 <?php if ($telegramBotUrl !== null): ?>
                     <a href="<?= htmlspecialchars($telegramBotUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer" class="footer__link nav__link">Мы в Telegram</a>
                     <a href="<?= htmlspecialchars($telegramBotUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer" class="footer__link" aria-label="Открыть GitPosted в Telegram">
-                        <img src="/assets/promo/02.svg" alt="">
+                        <img src="<?= $sitePath('/assets/promo/02.svg') ?>" alt="">
                     </a>
                 <?php endif; ?>
                 <?php if ($maxBotUrl !== null): ?>
@@ -244,19 +245,19 @@ $renderPlatformCta = static function (string $modifier = '') use (
         <h2 class="about-us__title">О боте</h2>
         <div class="about-us__blocks">
             <div class="about-us-block">
-                <img src="/assets/promo/01.svg" alt="" class="about-us-block__image">
+                <img src="<?= $sitePath('/assets/promo/01.svg') ?>" alt="" class="about-us-block__image">
                 <p class="about-us-block__text">Упрощает ведение канала</p>
             </div>
             <div class="about-us-block">
-                <img src="/assets/promo/02(1).svg" alt="" class="about-us-block__image">
+                <img src="<?= $sitePath('/assets/promo/02(1).svg') ?>" alt="" class="about-us-block__image">
                 <p class="about-us-block__text">Автоматически выкладывает и удаляет публикации в нужное время</p>
             </div>
             <div class="about-us-block">
-                <img src="/assets/promo/03.svg" alt="" class="about-us-block__image">
+                <img src="<?= $sitePath('/assets/promo/03.svg') ?>" alt="" class="about-us-block__image">
                 <p class="about-us-block__text">Позволяет создавать уникальный контент</p>
             </div>
             <div class="about-us-block">
-                <img src="/assets/promo/04.svg" alt="" class="about-us-block__image">
+                <img src="<?= $sitePath('/assets/promo/04.svg') ?>" alt="" class="about-us-block__image">
                 <p class="about-us-block__text">Дает возможность назначить редакторов для канала</p>
             </div>
         </div>
@@ -268,25 +269,25 @@ $renderPlatformCta = static function (string $modifier = '') use (
     <div class="container">
         <h2 class="triggers__title">Преимущества бота</h2>
         <div class="triggers__blocks">
-            <img class="triggers__line" src="/assets/promo/line.svg" alt="">
+            <img class="triggers__line" src="<?= $sitePath('/assets/promo/line.svg') ?>" alt="">
             <div class="triggers__content">
                 <div class="trigger trigger_lower">
-                    <img src="/assets/promo/01(1).svg" alt="" class="trigger__image">
+                    <img src="<?= $sitePath('/assets/promo/01(1).svg') ?>" alt="" class="trigger__image">
                     <h3 class="trigger__title">Простое подключение</h3>
                     <p class="trigger__text">Добавьте бота администратором канала и продолжайте настройку прямо в Telegram или МАКС.</p>
                 </div>
                 <div class="trigger">
-                    <img src="/assets/promo/02(2).svg" alt="" class="trigger__image">
+                    <img src="<?= $sitePath('/assets/promo/02(2).svg') ?>" alt="" class="trigger__image">
                     <h3 class="trigger__title">Поддержка анимированных эмодзи</h3>
                     <p class="trigger__text">В Telegram используйте анимированные эмодзи в тексте и кнопках; в МАКС — нативные цветные кнопки.</p>
                 </div>
                 <div class="trigger">
-                    <img src="/assets/promo/03(1).svg" alt="" class="trigger__image">
+                    <img src="<?= $sitePath('/assets/promo/03(1).svg') ?>" alt="" class="trigger__image">
                     <h3 class="trigger__title">Поддержка лонгридов</h3>
                     <p class="trigger__text">Создавайте длинные публикации, добавляйте фото, видео, кнопки, реакции и скрытое продолжение.</p>
                 </div>
                 <div class="trigger trigger_lower">
-                    <img src="/assets/promo/04(1).svg" alt="" class="trigger__image">
+                    <img src="<?= $sitePath('/assets/promo/04(1).svg') ?>" alt="" class="trigger__image">
                     <h3 class="trigger__title">Публикация по расписанию</h3>
                     <p class="trigger__text">Настройте время выхода, автоматическое удаление и повтор публикации заранее.</p>
                 </div>
@@ -334,7 +335,7 @@ $renderPlatformCta = static function (string $modifier = '') use (
             <h2 class="opinions__title">Возможности GitPosted</h2>
             <article class="opinion">
                 <div class="opinion-author">
-                    <img src="/assets/promo/01.svg" alt="" class="opinion-author__image opinion-author__icon">
+                    <img src="<?= $sitePath('/assets/promo/01.svg') ?>" alt="" class="opinion-author__image opinion-author__icon">
                     <div class="opinion-author__text">
                         <h3 class="opinion-author__nick">Контент-план</h3>
                         <span class="opinion-author__link">Публикации по расписанию</span>
@@ -344,7 +345,7 @@ $renderPlatformCta = static function (string $modifier = '') use (
             </article>
             <article class="opinion">
                 <div class="opinion-author">
-                    <img src="/assets/promo/02(2).svg" alt="" class="opinion-author__image opinion-author__icon">
+                    <img src="<?= $sitePath('/assets/promo/02(2).svg') ?>" alt="" class="opinion-author__image opinion-author__icon">
                     <div class="opinion-author__text">
                         <h3 class="opinion-author__nick">Анимированные эмодзи</h3>
                         <span class="opinion-author__link">Оформление текста и кнопок</span>
@@ -356,7 +357,7 @@ $renderPlatformCta = static function (string $modifier = '') use (
         <div class="opinions__inner">
             <article class="opinion">
                 <div class="opinion-author">
-                    <img src="/assets/promo/02(1).svg" alt="" class="opinion-author__image opinion-author__icon">
+                    <img src="<?= $sitePath('/assets/promo/02(1).svg') ?>" alt="" class="opinion-author__image opinion-author__icon">
                     <div class="opinion-author__text">
                         <h3 class="opinion-author__nick">Автоматическое удаление</h3>
                         <span class="opinion-author__link">Жизненный цикл поста</span>
@@ -366,7 +367,7 @@ $renderPlatformCta = static function (string $modifier = '') use (
             </article>
             <article class="opinion">
                 <div class="opinion-author">
-                    <img src="/assets/promo/03.svg" alt="" class="opinion-author__image opinion-author__icon">
+                    <img src="<?= $sitePath('/assets/promo/03.svg') ?>" alt="" class="opinion-author__image opinion-author__icon">
                     <div class="opinion-author__text">
                         <h3 class="opinion-author__nick">Медиа, реакции и URL-кнопки</h3>
                         <span class="opinion-author__link">Полное оформление поста</span>
@@ -376,7 +377,7 @@ $renderPlatformCta = static function (string $modifier = '') use (
             </article>
             <article class="opinion">
                 <div class="opinion-author">
-                    <img src="/assets/promo/04.svg" alt="" class="opinion-author__image opinion-author__icon">
+                    <img src="<?= $sitePath('/assets/promo/04.svg') ?>" alt="" class="opinion-author__image opinion-author__icon">
                     <div class="opinion-author__text">
                         <h3 class="opinion-author__nick">Каналы и редакторы</h3>
                         <span class="opinion-author__link">Совместная работа</span>
@@ -444,8 +445,8 @@ $renderPlatformCta = static function (string $modifier = '') use (
         <div class="footer__links footer__links_legal">
             <a href="<?= htmlspecialchars($projectRepository, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer" class="footer__link">GitHub</a>
             <a href="#faq" class="footer__link">Вопросы и ответы</a>
-            <a href="/user-agreement/" class="footer__link">Соглашение</a>
-            <a href="/privacy/" class="footer__link">Конфиденциальность</a>
+            <a href="<?= $sitePath('/user-agreement/') ?>" class="footer__link">Соглашение</a>
+            <a href="<?= $sitePath('/privacy/') ?>" class="footer__link">Конфиденциальность</a>
             <?php if ($maxBotUrl !== null): ?>
                 <a href="<?= htmlspecialchars($maxBotUrl, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') ?>" target="_blank" rel="noopener noreferrer" class="footer__link">GitPosted в МАКС</a>
             <?php endif; ?>
@@ -456,6 +457,6 @@ $renderPlatformCta = static function (string $modifier = '') use (
     </div>
 </footer>
 
-<script src="/assets/promo/app.js" defer></script>
+<script src="<?= $sitePath('/assets/promo/app.js') ?>" defer></script>
 </body>
 </html>

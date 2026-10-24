@@ -34,7 +34,7 @@ $hCaptchaReady =
     preg_match('/\A[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\z/Di', $hCaptchaSiteKey) === 1
     && preg_match('/\AES_[A-Za-z0-9_-]{20,128}\z/D', trim((string) ($hCaptchaSettings['secret'] ?? ''))) === 1;
 session_name('posted_admin');
-session_set_cookie_params(['lifetime'=>0,'path'=>'/control/','secure'=>true,'httponly'=>true,'samesite'=>'Strict']);
+session_set_cookie_params(['lifetime'=>0,'path'=>gitpostedAppPath($config, '/control/'),'secure'=>true,'httponly'=>true,'samesite'=>'Strict']);
 session_start();
 
 function e(mixed $value): string { return htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
@@ -53,9 +53,10 @@ function adminPage(mixed $value): string {
     return in_array($page, $allowed, true) ? $page : 'overview';
 }
 function go(string $message = '', ?string $page = null): never {
+    global $config;
     if ($message !== '') $_SESSION['flash'] = $message;
     $target = adminPage($page ?? ($_POST['return_page'] ?? $_GET['page'] ?? 'overview'));
-    header('Location: /control/?page=' . rawurlencode($target), true, 303);
+    header('Location: ' . gitpostedAppPath($config, '/control/?page=') . rawurlencode($target), true, 303);
     exit;
 }
 function adminConfigWritableTarget(string $path, string $dataDirectory): string {
@@ -1103,7 +1104,7 @@ if (!$authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     if ($loginResult['authorized']) {
         session_regenerate_id(true); $_SESSION['posted_admin_authenticated'] = true; $_SESSION['csrf'] = bin2hex(random_bytes(24));
-        unset($_SESSION['login_csrf']); $_SESSION['flash'] = 'Вход выполнен.'; header('Location: /control/?page=overview', true, 303); exit;
+        unset($_SESSION['login_csrf']); $_SESSION['flash'] = 'Вход выполнен.'; header('Location: ' . gitpostedAppPath($config, '/control/?page=overview'), true, 303); exit;
     }
     $_SESSION['login_csrf'] = bin2hex(random_bytes(24));
     if ((int)$loginResult['blocked_until'] > time()) {
@@ -1112,7 +1113,7 @@ if (!$authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $_SESSION['login_error'] = 'Не удалось выполнить вход. Проверьте логин, пароль и проверку безопасности.';
     }
-    header('Location: /control/?page=overview', true, 303);
+    header('Location: ' . gitpostedAppPath($config, '/control/?page=overview'), true, 303);
     exit;
 }
 unset($hCaptchaSettings);
@@ -1133,7 +1134,7 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
             setcookie(session_name(), '', time()-42000, $params['path'], $params['domain'] ?? '', (bool)$params['secure'], (bool)$params['httponly']);
         }
         session_destroy();
-        header('Location: /control/?page=overview', true, 303);
+        header('Location: ' . gitpostedAppPath($config, '/control/?page=overview'), true, 303);
         exit;
     }
     try {

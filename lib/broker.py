@@ -565,7 +565,7 @@ class Broker:
             p.configure_nginx({**self.public, 'pending_host': host})
             p.obtain_certificate(host, ip, settings['email'])
         elif step == 'nginx':
-            candidate = {**self.public, 'site_host': host, 'site_url': 'https://' + host,
+            candidate = {**self.public, 'site_host': host, 'site_url': 'https://' + host + p.path_prefix(self.public),
                          'acme_hosts': host_aliases(self.public, host),
                          'allowed_hosts': list(dict.fromkeys([self.public['host'], host]))}
             candidate.pop('pending_host', None)

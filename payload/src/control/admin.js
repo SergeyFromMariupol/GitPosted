@@ -36,6 +36,8 @@
 })();
 
 (() => {
+    const appBasePath = document.body.dataset.appBasePath || '';
+    if (appBasePath !== '' && appBasePath !== '/GitPosted') throw new Error('Некорректный путь приложения.');
     const toBuffer = (value) => {
         const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
         const raw = atob(base64 + '='.repeat((4 - base64.length % 4) % 4));
@@ -48,7 +50,7 @@
         return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
     };
     const request = async (path, options = {}) => {
-        const response = await fetch(`/control/passkeys.php/${path}`, {
+        const response = await fetch(`${appBasePath}/control/passkeys.php/${path}`, {
             ...options,
             headers: {
                 'Content-Type': 'application/json',

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace GitPostedInstaller;
 
+require_once dirname(__DIR__) . '/payload/src/web-path.php';
+
 final class WizardError extends \RuntimeException
 {
     public function __construct(public readonly string $errorCode, string $message, public readonly int $status = 400)
@@ -145,11 +147,13 @@ final class Wizard
 
     public static function trustedHost(array $server, array $public): bool
     {
+        try { self::pathPrefix($public); }
+        catch (\InvalidArgumentException) { return false; }
         $authority = self::authority((string) ($server['HTTP_HOST'] ?? ''));
         $base = parse_url((string) ($public['base_url'] ?? ''));
         if ($authority === null || !is_array($base) || !isset($base['host']) || isset($base['user']) || isset($base['pass'])
             || !in_array($base['scheme'] ?? '', ['http', 'https'], true)
-            || !in_array($base['path'] ?? '', ['', '/'], true) || isset($base['query']) || isset($base['fragment'])) return false;
+            || isset($base['query']) || isset($base['fragment'])) return false;
         $configuredHost = self::hostText((string) $base['host']);
         $publicHost = self::hostText((string) ($public['host'] ?? ''));
         $allowed = (array) ($public['allowed_hosts'] ?? [$publicHost]);
@@ -158,6 +162,15 @@ final class Wizard
         $default = self::secure($server) ? 443 : 80;
         $port = (int) ($base['port'] ?? $default);
         return $authority['port'] === null || $authority['port'] === $port;
+    }
+
+    public static function pathPrefix(array $public): string
+    {
+        $prefix = \gitpostedUrlMount((string) ($public['base_url'] ?? ''), true);
+        if (array_key_exists('path_prefix', $public) && $public['path_prefix'] !== $prefix) {
+            throw new \InvalidArgumentException('Inconsistent installer path.');
+        }
+        return $prefix;
     }
 
     public function handle(string $method, string $action, array $server, string $raw = ''): array
@@ -179,7 +192,7 @@ final class Wizard
                     // Job and host/completion metadata must describe the same root checkpoint.
                     // Never spread arbitrary broker fields into the HTTP response.
                     $fresh = array_intersect_key($broker, array_flip(['installed', 'tls_ready', 'base_url', 'host',
-                        'public_ip', 'site_url', 'site_host', 'allowed_hosts']));
+                        'public_ip', 'site_url', 'site_host', 'allowed_hosts', 'path_prefix']));
                     $public = array_replace($public, $fresh);
                     if (!is_bool($public['installed'] ?? null) || !is_bool($public['tls_ready'] ?? null)
                         || !self::trustedHost($server, $public)) throw new \RuntimeException('Invalid root status.');

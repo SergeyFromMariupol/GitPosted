@@ -48,7 +48,7 @@ class DeepProvisionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory()as temporary,patch.object(p,'STATE',Path(temporary)/'state'):
             p.initialize_state('8.8.8.8','example.org')
             self.assertEqual(['bootstrap.json','installer.lock'],sorted(x.name for x in p.STATE.iterdir()))
-            self.assertEqual({'installer':'gitposted-clean-v1','public_ip':'8.8.8.8','host':'example.org','shared_host':False},p.read_json(p.STATE/'bootstrap.json'))
+            self.assertEqual({'installer':'gitposted-clean-v1','public_ip':'8.8.8.8','host':'example.org','shared_host':False,'path_prefix':''},p.read_json(p.STATE/'bootstrap.json'))
             self.assertEqual(0o700,p.STATE.stat().st_mode&0o777)
             self.assertEqual(0o600,(p.STATE/'installer.lock').stat().st_mode&0o777)
             self.assertFalse(p.resume_ready(),'Infrastructure resume must continue without adopting any other state.')

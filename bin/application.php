@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/payload/src/bot-commands.php';
+require_once dirname(__DIR__) . '/payload/src/web-path.php';
 
 /** Private broker child. Credentials arrive only on stdin or in installed config. */
 final class InstallerApplicationFailure extends RuntimeException
@@ -244,13 +245,9 @@ final class InstallerApplication
     private function endpoint(array $config, string $platform): string
     {
         $base = (string) ($config['base_url'] ?? '');
-        $parts = parse_url($base);
-        if (filter_var($base, FILTER_VALIDATE_URL) === false || preg_match('/[\x00-\x20\x7f]/', $base)
-            || !is_array($parts) || ($parts['scheme'] ?? '') !== 'https' || !isset($parts['host'])
-            || isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])
-            || !in_array($parts['path'] ?? '', ['', '/'], true) || str_ends_with($base, '/')) {
-            throw new InstallerApplicationFailure('INVALID_BASE_URL', 'Адрес приложения должен быть HTTPS origin без завершающего слеша.');
-        }
+        try { gitpostedUrlMount($base); }
+        catch (InvalidArgumentException) { throw new InstallerApplicationFailure('INVALID_BASE_URL', 'Адрес приложения должен быть HTTPS URL с путём /GitPosted или без пути.'); }
+        if (str_ends_with($base, '/')) throw new InstallerApplicationFailure('INVALID_BASE_URL', 'Адрес приложения должен быть без завершающего слеша.');
         return $base . ($platform === 'telegram' ? '/webhook.php' : '/max-webhook.php');
     }
 

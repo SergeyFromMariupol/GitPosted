@@ -12,9 +12,10 @@ function adminStatus(bool $enabled, string $enabledText = 'Включено', st
 
 function adminPlatformIcon(string $surface): string
 {
+    global $config;
     return match ($surface) {
-        'telegram' => '<img src="/assets/admin/platforms/telegram.webp" alt="">',
-        'max' => '<img src="/assets/admin/platforms/max.webp" alt="">',
+        'telegram' => '<img src="' . e(gitpostedAppPath($config, '/assets/admin/platforms/telegram.webp')) . '" alt="">',
+        'max' => '<img src="' . e(gitpostedAppPath($config, '/assets/admin/platforms/max.webp')) . '" alt="">',
         default => '<i class="fa-solid fa-globe" aria-hidden="true"></i>',
     };
 }
@@ -112,14 +113,14 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex,nofollow">
     <title><?= e($pageTitle[0]) ?> — GitPosted · Панель управления</title>
-    <link rel="stylesheet" href="/assets/admin/fontawesome/css/fontawesome.min.css?v=6.5.2">
-    <link rel="stylesheet" href="/assets/admin/fontawesome/css/solid.min.css?v=6.5.2">
-    <link rel="stylesheet" href="/control/admin.css?v=<?= (int) filemtime(__DIR__ . '/admin.css') ?>">
+    <link rel="stylesheet" href="<?= e(gitpostedAppPath($config, '/assets/admin/fontawesome/css/fontawesome.min.css')) ?>?v=6.5.2">
+    <link rel="stylesheet" href="<?= e(gitpostedAppPath($config, '/assets/admin/fontawesome/css/solid.min.css')) ?>?v=6.5.2">
+    <link rel="stylesheet" href="<?= e(gitpostedAppPath($config, '/control/admin.css')) ?>?v=<?= (int) filemtime(__DIR__ . '/admin.css') ?>">
     <?php if (!$authorized && $hCaptchaRequired && $hCaptchaReady): ?>
         <script src="https://js.hcaptcha.com/1/api.js?hl=ru" async defer></script>
     <?php endif; ?>
 </head>
-<body class="<?= $authorized ? 'admin-body' : 'login-body' ?>">
+<body class="<?= $authorized ? 'admin-body' : 'login-body' ?>" data-app-base-path="<?= e(gitpostedUrlMount((string) $config['base_url'])) ?>">
 <?php if (!$authorized): ?>
 <main class="login-page">
     <section class="login-card">
@@ -178,10 +179,10 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
                 <div class="nav-group">
                     <div class="nav-group__title"><?= e($group) ?></div>
                     <?php foreach ($items as [$target, $icon, $label]): ?>
-                        <a class="nav-item <?= $page === $target ? 'nav-item--active' : '' ?>" href="/control/?page=<?= e($target) ?>">
+                        <a class="nav-item <?= $page === $target ? 'nav-item--active' : '' ?>" href="<?= e(gitpostedAppPath($config, '/control/')) ?>?page=<?= e($target) ?>">
                             <span class="nav-item__icon">
                                 <?php if (str_starts_with($icon, '/')): ?>
-                                    <img src="<?= e($icon) ?>" alt="">
+                                    <img src="<?= e(gitpostedAppPath($config, $icon)) ?>" alt="">
                                 <?php else: ?>
                                     <i class="<?= e($icon) ?>" aria-hidden="true"></i>
                                 <?php endif; ?>
@@ -208,7 +209,7 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
             <div class="topbar__identity">
                 <span class="topbar__page-icon">
                     <?php if (str_starts_with((string) $pageTitle[2], '/')): ?>
-                        <img src="<?= e($pageTitle[2]) ?>" alt="">
+                        <img src="<?= e(gitpostedAppPath($config, (string) $pageTitle[2])) ?>" alt="">
                     <?php else: ?>
                         <i class="<?= e($pageTitle[2]) ?>" aria-hidden="true"></i>
                     <?php endif; ?>
@@ -218,7 +219,7 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
                     <p><?= e($pageTitle[1]) ?></p>
                 </div>
             </div>
-            <a class="button button--quiet topbar__site-link" href="/" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i><span>Открыть сайт</span></a>
+            <a class="button button--quiet topbar__site-link" href="<?= e(gitpostedAppPath($config, '/')) ?>" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i><span>Открыть сайт</span></a>
         </header>
 
         <?php if ($flash !== ''): ?>
@@ -534,7 +535,7 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
                 <article class="panel">
                     <div class="panel__head"><div><div class="eyebrow">ИНТЕГРАЦИИ</div><h2>Точки входа</h2></div></div>
                     <dl class="config-list">
-                        <div><dt>Telegram webhook</dt><dd><code>/webhook.php</code></dd></div>
+                        <div><dt>Telegram webhook</dt><dd><code><?= e(gitpostedAppPath($config, '/webhook.php')) ?></code></dd></div>
                         <div><dt>Webhook МАКС</dt><dd><code>/max-webhook.php</code></dd></div>
                         <div><dt>Планировщик</dt><dd><code>cron.php</code></dd></div>
                     </dl>
@@ -554,7 +555,7 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
         </div>
     </main>
 </div>
-<script src="/control/admin.js?v=<?= (int) filemtime(__DIR__ . '/admin.js') ?>" defer></script>
+<script src="<?= e(gitpostedAppPath($config, '/control/admin.js')) ?>?v=<?= (int) filemtime(__DIR__ . '/admin.js') ?>" defer></script>
 <?php endif; ?>
 </body>
 </html>

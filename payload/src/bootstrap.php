@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 date_default_timezone_set('Europe/Moscow');
+require_once __DIR__ . '/web-path.php';
 require_once __DIR__ . '/account.php';
 require_once __DIR__ . '/publication-plan.php';
 require_once __DIR__ . '/post-link.php';
