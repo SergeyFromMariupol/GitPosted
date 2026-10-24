@@ -182,6 +182,9 @@ def run_case(name, tg, mx, repair=False, foreign=False):
         write(root/'router.php',"<?php $_SERVER['HTTPS']='on';$_SERVER['SERVER_PORT']='443';require '"+str(api)+"';")
         loader="import sys\nfrom pathlib import Path\nsys.path.insert(0,"+repr(str(bundle/'lib'))+")\nimport provision as p\n"
         for key,value in {'STATE':state,'DATA':data,'CONFIG':config,'INSTALL':bundle,'APP':root/'app'}.items():loader+='p.'+key+'=Path('+repr(str(value))+')\n'
+        # The integration case owns a separate host view and suite lease. It
+        # must not inspect or lock an actual sibling installation on this VPS.
+        loader+='p.coinstall.ROOT=Path('+repr(str(root/'fixture-host'))+')\np.coinstall.ROOT.mkdir(mode=0o700,exist_ok=True)\n(p.coinstall.ROOT/"run").mkdir(mode=0o700,exist_ok=True)\n'
         loader+='p.configure_nginx=lambda public:None\noriginal_run=p.run\np.run=lambda argv,**kw:b"" if str(argv[0])=="systemctl" else original_run(argv,**kw)\n'
         write(root/'start-broker.py',loader+'import broker\nbroker.main()\n')
         write(root/'enroll.py',loader+"p.save_json(p.STATE/'public.json',{'host':'"+HOST+"','public_ip':'8.8.8.8','base_url':'"+BASE+"','site_url':'"+BASE+"','allowed_hosts':['"+HOST+"'],'tls_ready':True,'installed':False,'version':p.VERSION,'job':{'status':'idle','steps':[]}},True)\nprint(p.enrollment())\n")

@@ -63,6 +63,7 @@ class ProvisionAuditTests(unittest.TestCase):
              patch.object(sys, 'argv', ['provision.py', '--public-ip', '8.8.8.8']), patch.object(p, 'preflight'), \
              patch.object(p, 'dns_matches'), patch.object(p, 'validate_source', side_effect=p.Failure('UNSAFE_PACKAGE', 'Fixture source failure'), create=True), \
              patch.object(p, 'directory') as directory, patch.object(p, 'installer_lock', contextlib.nullcontext), \
+             patch.object(p, 'shared_lock', return_value=contextlib.nullcontext()), patch.object(p.os, 'geteuid', return_value=0, create=True), \
              patch.object(p, 'install') as install, contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit) as error:
                 p.main()

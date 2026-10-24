@@ -20,16 +20,22 @@ import pwd
 
 
 @unittest.skipUnless(os.name == 'posix' and os.geteuid() == 0 and shutil.which('php') and shutil.which('runuser'),
-                     'Requires Linux root and the dedicated installer test users')
+                     'Requires Linux root, PHP and runuser')
 class ChildLifetime(unittest.TestCase):
     def setUp(self):
-        account = pwd.getpwnam(p.APP_USER)
+        try:
+            account = pwd.getpwnam(p.APP_USER)
+        except KeyError:
+            # A fixture must not create the real app account and thereby block
+            # a later clean install on the same acceptance host.
+            account = pwd.getpwnam('nobody')
         self.uid, self.gid = account.pw_uid, account.pw_gid
         self.root = Path(tempfile.mkdtemp(prefix='gitposted-helper-lifetime.', dir='/var/tmp'));self.root.chmod(0o755)
         (self.root/'bin').mkdir(mode=0o755)
         self.effects = self.root/'effects';self.effects.mkdir(mode=0o700);os.chown(self.effects,self.uid,self.gid)
         self.addCleanup(self.cleanup_root)
-        self.patches = [mock.patch.object(p,'INSTALL',self.root),mock.patch.object(p,'CONFIG',self.root/'unused-config.php')]
+        self.patches = [mock.patch.object(p,'INSTALL',self.root),mock.patch.object(p,'CONFIG',self.root/'unused-config.php'),
+                        mock.patch.object(p,'APP_USER',account.pw_name)]
         for item in self.patches:item.start();self.addCleanup(item.stop)
 
     def script(self, body):
