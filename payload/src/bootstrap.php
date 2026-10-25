@@ -9,6 +9,8 @@ require_once __DIR__ . '/publication-plan.php';
 require_once __DIR__ . '/post-link.php';
 require_once __DIR__ . '/telegram-native-forward.php';
 require_once __DIR__ . '/telegram-post-links.php';
+require_once __DIR__ . '/telegram-account-transfer.php';
+require_once __DIR__ . '/telegram-account-transfer-ui.php';
 
 final class PostedConfig
 {
@@ -913,6 +915,7 @@ final class PostedTelegram
 final class PostedBot
 {
     use GitPostedTelegramPostLinks;
+    use GitPostedTelegramAccountTransferUi;
     private const TEXT_LIMIT = 4096;
     private const PHOTO_CAPTION_LIMIT = 1024;
     private const HIDDEN_TEXT_LIMIT = 190;
@@ -1406,6 +1409,13 @@ final class PostedBot
         $user = $this->user($userId);
         if (!$this->isKnownActiveUser($user)) {
             $this->answerCallback($callback, 'Доступ не выдан.');
+            return;
+        }
+        // Transfer buttons must validate their nonce before touching unrelated
+        // work, including an album which arrived after an old confirmation.
+        if (str_starts_with($data, 'transfer:')) {
+            $this->answerCallback($callback);
+            $this->handleTelegramAccountTransferCallback($userId, $data, $this->callbackTarget($callback));
             return;
         }
         if ((string) ($user['state'] ?? '') === 'collecting_media_group') {
@@ -1903,6 +1913,7 @@ final class PostedBot
 
     private function handleStateMessage(int $userId, string $state, array $data, array $message): void
     {
+        if ($this->handleTelegramAccountTransferInput($userId, $state, $data, $message)) return;
         if ($state === 'await_publication_plan') {
             $this->handlePublicationPlanInput($userId, $data, trim((string)($message['text'] ?? '')));
             return;
@@ -2031,7 +2042,7 @@ final class PostedBot
             return;
         }
         if ($state === 'await_folder_title') {
-            $this->saveFolderTitle($userId,(int)($data['folder_id']??0),(string)($message['text']??''));
+            $this->saveFolderTitle($userId,(int)($data['folder_id']??0),(string)($message['text']??''),$data);
             return;
         }
         if ($state === 'await_channel_schedule') {
@@ -2115,7 +2126,7 @@ final class PostedBot
             return;
         }
         if ($state === 'await_channel_ref') {
-            $this->registerChannelFromMessage($userId, $message);
+            $this->registerChannelFromMessage($userId, $message, $data);
             return;
         }
         if ($state === 'await_edit_forward') {
@@ -2159,7 +2170,7 @@ final class PostedBot
             return;
         }
         if ($state === 'await_template_content') {
-            $this->createTemplateFromMessage($userId, (int) ($data['scope_id'] ?? 0), $message);
+            $this->createTemplateFromMessage($userId, (int) ($data['scope_id'] ?? 0), $message, $data);
             return;
         }
         if(in_array($state,['await_template_edit_text','await_template_edit_media','await_template_edit_buttons'],true)){
@@ -10515,7 +10526,7 @@ final class PostedBot
             return;
         }
 
-        $this->setState($userId, 'await_template_content', ['scope_id' => $scopeId]);
+        $this->setState($userId, 'await_template_content', ['scope_id' => $scopeId, 'input_token' => bin2hex(random_bytes(12))]);
         $this->telegram->sendMessage(
             $userId,
             'Отправьте боту шаблон, который вы хотите сохранить.',
@@ -10523,39 +10534,89 @@ final class PostedBot
         );
     }
 
-    private function createTemplateFromMessage(int $userId, int $scopeId, array $message): void
+    private function createTemplateFromMessage(int $userId, int $scopeId, array $message, array $expectedStateData): void
     {
-        if ($scopeId > 0 && !$this->can($userId, $scopeId, 'post')) {
-            $this->telegram->sendMessage($userId, 'Нет доступа к шаблонам этого канала.');
+        if ((int) ($expectedStateData['scope_id'] ?? 0) !== $scopeId) return;
+        $current = $this->pdo->prepare(
+            "SELECT telegram_id FROM posted_users
+             WHERE telegram_id=:user AND is_active=1 AND state='await_template_content'
+               AND state_data <=> CAST(:data AS JSON) LIMIT 1"
+        );
+        $current->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
+        if ($current->fetchColumn() === false) return;
+        if ($scopeId > 0 && !$this->ensureTelegramChannelTenure($scopeId)) {
+            $this->telegram->sendMessage($userId, 'Владение каналом в Telegram больше не подтверждено.');
             return;
         }
-
         $content = $this->contentFromMessage($message);
         if ($content['text'] === '' && $content['media_file_id'] === null) {
             $this->telegram->sendMessage($userId, 'Нужен текст либо поддерживаемое медиа с подписью.');
             return;
         }
-
-        $stmt = $this->pdo->prepare(
-            "INSERT INTO posted_templates
-                (owner_id,channel_id,title,text,text_entities_json,media_type,media_file_id)
-             VALUES
-                (:owner_id,:channel_id,:title,:text,:text_entities_json,:media_type,:media_file_id)"
-        );
-        $stmt->execute([
-            'owner_id' => $userId,
-            'channel_id' => $scopeId > 0 ? $scopeId : null,
-            'title' => $this->templateTitle($content['text'], $content['media_type']),
-            'text' => $content['text'] !== '' ? $content['text'] : null,
-            'text_entities_json' => $content['text_entities'] !== []
-                ? $this->encodeJson($content['text_entities'])
-                : null,
-            'media_type' => $content['media_type'],
-            'media_file_id' => $content['media_file_id'],
-        ]);
-
-        $templateId=(int)$this->pdo->lastInsertId();
-        $this->clearState($userId);
+        $ownsTransaction = !$this->pdo->inTransaction();
+        if ($ownsTransaction) $this->pdo->beginTransaction();
+        $templateId = 0;
+        try {
+            if ($scopeId > 0) {
+                $channel = $this->pdo->prepare(
+                    'SELECT id FROM posted_channels WHERE id=:channel AND is_active=1
+                       AND added_by IS NOT NULL AND added_by>0 LIMIT 1 FOR UPDATE'
+                );
+                $channel->execute(['channel'=>$scopeId]);
+                if ($channel->fetchColumn() === false) {
+                    if ($ownsTransaction) $this->pdo->commit();
+                    return;
+                }
+            }
+            // Match transfer's actor -> owner-range order, including an empty
+            // range whose gap lock cannot serialize concurrent inserts.
+            if (!$this->lockActiveTelegramActor($userId)) {
+                if ($ownsTransaction) $this->pdo->commit();
+                return;
+            }
+            $range = $this->pdo->prepare('SELECT id FROM posted_templates WHERE owner_id=:owner ORDER BY id FOR UPDATE');
+            $range->execute(['owner'=>$userId]);
+            $range->fetchAll(PDO::FETCH_COLUMN);
+            $current = $this->pdo->prepare(
+                "SELECT telegram_id FROM posted_users
+                 WHERE telegram_id=:user AND is_active=1 AND state='await_template_content'
+                   AND state_data <=> CAST(:data AS JSON) LIMIT 1 FOR UPDATE"
+            );
+            $current->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
+            if ($current->fetchColumn() === false) {
+                if ($ownsTransaction) $this->pdo->commit();
+                return;
+            }
+            if ($scopeId > 0) {
+                $permission=$this->pdo->prepare('SELECT can_post FROM posted_permissions WHERE user_id=:user AND channel_id=:channel LIMIT 1 FOR UPDATE');
+                $permission->execute(['user'=>$userId,'channel'=>$scopeId]);
+                if ((int) ($permission->fetchColumn() ?: 0) !== 1) {
+                    if ($ownsTransaction) $this->pdo->commit();
+                    return;
+                }
+            }
+            $stmt = $this->pdo->prepare(
+                "INSERT INTO posted_templates
+                    (owner_id,channel_id,title,text,text_entities_json,media_type,media_file_id)
+                 VALUES
+                    (:owner_id,:channel_id,:title,:text,:text_entities_json,:media_type,:media_file_id)"
+            );
+            $stmt->execute([
+                'owner_id'=>$userId,'channel_id'=>$scopeId>0?$scopeId:null,
+                'title'=>$this->templateTitle($content['text'],$content['media_type']),
+                'text'=>$content['text']!==''?$content['text']:null,
+                'text_entities_json'=>$content['text_entities']!==[]?$this->encodeJson($content['text_entities']):null,
+                'media_type'=>$content['media_type'],'media_file_id'=>$content['media_file_id'],
+            ]);
+            $templateId=(int)$this->pdo->lastInsertId();
+            $this->pdo->prepare("UPDATE posted_users SET state=NULL,state_data=NULL WHERE telegram_id=:user AND state='await_template_content' AND state_data <=> CAST(:data AS JSON)")
+                ->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
+            if ($ownsTransaction) $this->pdo->commit();
+        } catch (Throwable $exception) {
+            if ($ownsTransaction && $this->pdo->inTransaction()) $this->pdo->rollBack();
+            throw $exception;
+        }
+        if ($templateId <= 0) return;
         $this->showTemplateEditor($userId,$templateId);
     }
 
@@ -10847,7 +10908,7 @@ final class PostedBot
 
     private function startAddChannel(int $userId, ?array $target = null): void
     {
-        $this->setState($userId, 'await_channel_ref', []);
+        $this->setState($userId, 'await_channel_ref', ['input_token' => bin2hex(random_bytes(12))]);
         $this->sendOrEditMessage(
             $userId,
             "Чтобы подключить канал:\n\n"
@@ -10859,8 +10920,14 @@ final class PostedBot
         );
     }
 
-    private function registerChannelFromMessage(int $userId, array $message): void
+    private function registerChannelFromMessage(int $userId, array $message, array $expectedStateData): void
     {
+        $current = $this->pdo->prepare(
+            "SELECT telegram_id FROM posted_users WHERE telegram_id=:user AND is_active=1
+               AND state='await_channel_ref' AND state_data <=> CAST(:data AS JSON) LIMIT 1"
+        );
+        $current->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
+        if ($current->fetchColumn() === false) return;
         $origin = $this->forwardedChannelOrigin($message);
         if ($origin === null) {
             $this->telegram->sendMessage($userId, 'Перешлите боту любое сообщение из канала, который хотите подключить.');
@@ -10900,6 +10967,9 @@ final class PostedBot
         }
         $existing=$this->channelByChatId($chatId);
         $existingOwner = is_array($existing) ? (int) ($existing['added_by'] ?? 0) : 0;
+        $existingOwnerIsAdministrator = null;
+        $freezePermissionIds = null;
+        $actorIds = [$userId];
         if (!in_array($memberStatus, ['creator', 'administrator'], true)) {
             $this->telegram->sendMessage(
                 $userId,
@@ -10926,20 +10996,70 @@ final class PostedBot
                 );
                 return;
             }
-            if(
-                !is_array($existing)
-                ||!$this->freezeTelegramChannelOwnership((int)$existing['id'],$existingOwner)
-            ){
-                $this->telegram->sendMessage(
-                    $userId,
-                    'Права прежнего владельца отозваны, но освободить канал не удалось. Попробуйте ещё раз.'
-                );
-                return;
-            }
+            // The ownership freeze can clear each editor's channel workflow.
+            // Gather that actor set before the transaction, then verify it with
+            // a current read after acquiring all of those actors in ID order.
+            $permissionUsers=$this->pdo->prepare('SELECT user_id FROM posted_permissions WHERE channel_id=:channel ORDER BY user_id');
+            $permissionUsers->execute(['channel'=>(int)$existing['id']]);
+            $freezePermissionIds=array_values(array_unique(array_map('intval',$permissionUsers->fetchAll(PDO::FETCH_COLUMN))));
+            sort($freezePermissionIds,SORT_NUMERIC);
+            $actorIds=array_values(array_unique([$userId,$existingOwner,...$freezePermissionIds]));
+            sort($actorIds,SORT_NUMERIC);
         }
 
         $this->pdo->beginTransaction();
         try {
+            $lockedExisting = null;
+            // Known channel rows precede the actor, as in every channel action.
+            // Do not lock a missing chat-id range before the actor: compatible
+            // gap locks cannot serialize concurrent registration or transfer.
+            if (is_array($existing)) {
+                $known = $this->pdo->prepare('SELECT * FROM posted_channels WHERE id=:id LIMIT 1 FOR UPDATE');
+                $known->execute(['id'=>(int)$existing['id']]);
+                $lockedExisting=$known->fetch();
+                if (!is_array($lockedExisting) || (string)$lockedExisting['chat_id'] !== $chatId) {
+                    $this->pdo->commit();
+                    return;
+                }
+            }
+            if ($freezePermissionIds !== null) {
+                $actor=$this->pdo->prepare('SELECT telegram_id FROM posted_users WHERE telegram_id=:user LIMIT 1 FOR UPDATE');
+                foreach ($actorIds as $actorId) {
+                    if ($actorId <= 0) continue;
+                    $actor->execute(['user'=>$actorId]); $actor->fetchColumn();
+                }
+            }
+            if (!$this->lockActiveTelegramActor($userId)) {
+                $this->pdo->commit();
+                return;
+            }
+            $current = $this->pdo->prepare(
+                "SELECT telegram_id FROM posted_users WHERE telegram_id=:user AND is_active=1
+                   AND state='await_channel_ref' AND state_data <=> CAST(:data AS JSON) LIMIT 1 FOR UPDATE"
+            );
+            $current->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
+            if ($current->fetchColumn() === false) {
+                $this->pdo->commit();
+                return;
+            }
+            $lockedOwner = is_array($lockedExisting) ? (int)($lockedExisting['added_by']??0) : 0;
+            if ($lockedOwner > 0 && $lockedOwner !== $userId) {
+                if ($lockedOwner !== $existingOwner || $existingOwnerIsAdministrator !== false) {
+                    throw new RuntimeException('Владелец канала изменился. Подключите канал заново.');
+                }
+                $permissionUsers=$this->pdo->prepare('SELECT user_id FROM posted_permissions WHERE channel_id=:channel ORDER BY user_id FOR UPDATE');
+                $permissionUsers->execute(['channel'=>(int)$lockedExisting['id']]);
+                $currentPermissionIds=array_values(array_unique(array_map('intval',$permissionUsers->fetchAll(PDO::FETCH_COLUMN))));
+                sort($currentPermissionIds,SORT_NUMERIC);
+                if ($currentPermissionIds !== $freezePermissionIds) {
+                    throw new RuntimeException('Состав редакторов канала изменился. Подключите канал заново.');
+                }
+                // Freeze only after both the original prompt and the channel's
+                // current owner are verified. Its writes share this transaction.
+                if (!$this->freezeTelegramChannelOwnership((int)$lockedExisting['id'],$lockedOwner)) {
+                    throw new RuntimeException('Не удалось освободить канал после отзыва прав прежнего владельца. Попробуйте ещё раз.');
+                }
+            }
             $stmt = $this->pdo->prepare(
                 "INSERT INTO posted_channels
                     (chat_id,title,username,is_active,bot_status,bot_can_post,bot_can_edit,bot_can_delete,added_by)
@@ -10961,13 +11081,18 @@ final class PostedBot
                 throw new RuntimeException('Channel already has another GitPosted owner.');
             }
             $this->grant($userId,(int)$channel['id'],true,true,true,true,$userId);
+            $consume=$this->pdo->prepare(
+                "UPDATE posted_users SET state=NULL,state_data=NULL WHERE telegram_id=:user
+                   AND state='await_channel_ref' AND state_data <=> CAST(:data AS JSON)"
+            );
+            $consume->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
+            if ($consume->rowCount() !== 1) throw new RuntimeException('Подтверждение подключения изменилось. Повторите подключение.');
             $this->pdo->commit();
         } catch(Throwable $exception) {
             if($this->pdo->inTransaction())$this->pdo->rollBack();
             $this->telegram->sendMessage($userId,'Не удалось сохранить канал: '.$exception->getMessage());
             return;
         }
-        $this->clearState($userId);
         $title = (string) ($chat['title'] ?? $chatId);
         $ownerText = 'Вы назначены владельцем канала в GitPosted. Только вы можете назначать редакторов и отключать его.';
         $keyboard = [];
@@ -11181,7 +11306,7 @@ final class PostedBot
         $action=(string)($parts[1]??'');
         $folderId=(int)($parts[2]??0);
         if($action==='create'){
-            $this->setState($userId,'await_folder_title',['folder_id'=>0]);
+            $this->setState($userId,'await_folder_title',['folder_id'=>0,'input_token'=>bin2hex(random_bytes(12))]);
             $this->sendOrEditMessage($userId,"📂 НОВАЯ ПАПКА\n\nОтправьте название папки.",[
                 'reply_markup'=>['inline_keyboard'=>[[['text'=>'← Назад','callback_data'=>'settings:adv:folders']]]],
             ],$target);
@@ -11208,7 +11333,7 @@ final class PostedBot
             return;
         }
         if($action==='rename'){
-            $this->setState($userId,'await_folder_title',['folder_id'=>$folderId]);
+            $this->setState($userId,'await_folder_title',['folder_id'=>$folderId,'input_token'=>bin2hex(random_bytes(12))]);
             $this->sendOrEditMessage($userId,"✏️ ПЕРЕИМЕНОВАНИЕ ПАПКИ\n\nОтправьте новое название.",[
                 'reply_markup'=>['inline_keyboard'=>[[['text'=>'← Назад','callback_data'=>'folder:view:'.$folderId]]]],
             ],$target);
@@ -11230,15 +11355,47 @@ final class PostedBot
         }
     }
 
-    private function saveFolderTitle(int $userId, int $folderId, string $title): void
+    private function saveFolderTitle(int $userId, int $folderId, string $title, array $expectedStateData): void
     {
+        if ((int) ($expectedStateData['folder_id'] ?? 0) !== $folderId) return;
+        $current = $this->pdo->prepare(
+            "SELECT telegram_id FROM posted_users WHERE telegram_id=:user AND is_active=1
+               AND state='await_folder_title' AND state_data <=> CAST(:data AS JSON) LIMIT 1"
+        );
+        $current->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
+        if ($current->fetchColumn() === false) return;
         $title=trim($title);
         if($title===''||mb_strlen($title)>64){
             $this->telegram->sendMessage($userId,'Название папки должно содержать от 1 до 64 символов.');
             return;
         }
+        $ownsTransaction = !$this->pdo->inTransaction();
+        if ($ownsTransaction) $this->pdo->beginTransaction();
         try{
-            if($folderId>0&&$this->folder($userId,$folderId)){
+            // Match transfer's actor -> owner-range order. A delayed old
+            // rename must not turn into a new folder after ownership changes.
+            if (!$this->lockActiveTelegramActor($userId)) {
+                if ($ownsTransaction) $this->pdo->commit();
+                return;
+            }
+            $range=$this->pdo->prepare('SELECT id FROM posted_folders WHERE owner_id=:owner ORDER BY id FOR UPDATE');
+            $range->execute(['owner'=>$userId]); $range->fetchAll(PDO::FETCH_COLUMN);
+            $current = $this->pdo->prepare(
+                "SELECT telegram_id FROM posted_users WHERE telegram_id=:user AND is_active=1
+                   AND state='await_folder_title' AND state_data <=> CAST(:data AS JSON) LIMIT 1 FOR UPDATE"
+            );
+            $current->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
+            if ($current->fetchColumn() === false) {
+                if ($ownsTransaction) $this->pdo->commit();
+                return;
+            }
+            if($folderId>0){
+                $folder=$this->pdo->prepare('SELECT id FROM posted_folders WHERE id=:id AND owner_id=:owner LIMIT 1 FOR UPDATE');
+                $folder->execute(['id'=>$folderId,'owner'=>$userId]);
+                if ($folder->fetchColumn() === false) {
+                    if ($ownsTransaction) $this->pdo->commit();
+                    return;
+                }
                 $this->pdo->prepare('UPDATE posted_folders SET title=:title WHERE id=:id AND owner_id=:owner')
                     ->execute(['title'=>$title,'id'=>$folderId,'owner'=>$userId]);
             }else{
@@ -11246,11 +11403,17 @@ final class PostedBot
                     ->execute(['owner'=>$userId,'title'=>$title]);
                 $folderId=(int)$this->pdo->lastInsertId();
             }
-        }catch(PDOException){
-            $this->telegram->sendMessage($userId,'Папка с таким названием уже существует.');
-            return;
+            $this->pdo->prepare("UPDATE posted_users SET state=NULL,state_data=NULL WHERE telegram_id=:user AND state='await_folder_title' AND state_data <=> CAST(:data AS JSON)")
+                ->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
+            if ($ownsTransaction) $this->pdo->commit();
+        }catch(Throwable $exception){
+            if ($ownsTransaction && $this->pdo->inTransaction()) $this->pdo->rollBack();
+            if ($exception instanceof PDOException && (int)($exception->errorInfo[1]??0)===1062) {
+                $this->telegram->sendMessage($userId,'Папка с таким названием уже существует.');
+                return;
+            }
+            throw $exception;
         }
-        $this->clearState($userId);
         $this->showFolder($userId,$folderId);
     }
 
@@ -11293,6 +11456,7 @@ final class PostedBot
         }
         $keyboard[] = [['text' => 'Часовой пояс: ' . $this->timezoneTitle($tz) . ' (' . $this->timezoneTime($tz) . ')', 'callback_data' => 'settings:timezone']];
         $keyboard[] = [['text' => 'Продвинутые настройки', 'callback_data' => 'settings:advanced']];
+        $keyboard[] = [['text' => '♻️ Перенос данных', 'callback_data' => 'transfer:open']];
         $this->sendOrEditMessage($userId, $this->customEmojiHtml('5258096772776991776', '⚙️') . " <b>НАСТРОЙКИ</b>\n\nВ этом разделе вы можете настроить работу с ботом, с отдельным каналом, а также добавить новый канал в GitPosted.", [
             'parse_mode' => 'HTML',
             'reply_markup' => ['inline_keyboard' => $keyboard],

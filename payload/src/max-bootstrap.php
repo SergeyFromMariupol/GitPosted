@@ -11,6 +11,8 @@ require_once __DIR__ . '/max-interactive.php';
 require_once __DIR__ . '/max-comments.php';
 require_once __DIR__ . '/max-rights.php';
 require_once __DIR__ . '/max-post-links.php';
+require_once __DIR__ . '/max-account-transfer.php';
+require_once __DIR__ . '/max-account-transfer-ui.php';
 
 /**
  * Isolated MAX implementation for GitPosted.
@@ -1760,6 +1762,7 @@ final class GitPostedMaxBot
     use GitPostedMaxInteractive;
     use GitPostedMaxComments;
     use GitPostedMaxPostLinks;
+    use GitPostedMaxAccountTransferUi;
 
     private const UPDATE_TYPES = [
         'message_created',
@@ -1971,26 +1974,6 @@ final class GitPostedMaxBot
 
     public function runCron(int $limit = 20): array
     {
-        $lock = (int) $this->pdo->query("SELECT GET_LOCK('gitposted_max_cron',0)")->fetchColumn();
-        if ($lock !== 1) {
-            return [
-                'skipped' => 'already_running',
-                'updates' => 0,
-                'published' => 0,
-                'repeated' => 0,
-                'pending' => 0,
-                'reconciled' => 0,
-                'needs_review' => 0,
-                'pins' => 0,
-                'recovered' => 0,
-                'deleted' => 0,
-                'attempts_pruned' => 0,
-                'owners_checked' => 0,
-                'owners_revoked' => 0,
-                'errors' => [],
-            ];
-        }
-
         $result = [
             'updates' => 0,
             'published' => 0,
@@ -2006,6 +1989,36 @@ final class GitPostedMaxBot
             'owners_revoked' => 0,
             'errors' => [],
         ];
+
+        // Queued UI actions have their own actor locks and durable effects.
+        // Transfer validation must perform its MAX reads before acquiring the
+        // publication lock, just as the direct webhook path does.
+        $updates = $this->pdo->query(
+            "SELECT update_key
+             FROM posted_max_updates
+             WHERE attempts<5
+               AND (
+                 status IN ('queued','failed')
+                 OR (status='processing' AND started_at<DATE_SUB(NOW(),INTERVAL 2 MINUTE))
+               )
+             ORDER BY sequence_id
+             LIMIT " . max(1, min(100, $limit))
+        )->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($updates as $key) {
+            try {
+                if ($this->processUpdateByKey((string) $key)) {
+                    $result['updates']++;
+                }
+            } catch (Throwable $exception) {
+                $result['errors'][] = 'update ' . $key . ': ' . $exception->getMessage();
+            }
+        }
+
+        $lock = (int) $this->pdo->query("SELECT GET_LOCK('gitposted_max_cron',0)")->fetchColumn();
+        if ($lock !== 1) {
+            return ['skipped' => 'already_running'] + $result;
+        }
+
         try {
             $owners = $this->revalidateSavedMaxOwners(min(10, max(1, $limit)));
             $result['owners_checked'] += $owners['checked'];
@@ -2027,27 +2040,6 @@ final class GitPostedMaxBot
                     )"
             );
             $result['recovered'] += max(0, (int) $recovered);
-
-            $updates = $this->pdo->query(
-                "SELECT update_key
-                 FROM posted_max_updates
-                 WHERE attempts<5
-                   AND (
-                     status IN ('queued','failed')
-                     OR (status='processing' AND started_at<DATE_SUB(NOW(),INTERVAL 2 MINUTE))
-                   )
-                 ORDER BY sequence_id
-                 LIMIT " . max(1, min(100, $limit))
-            )->fetchAll(PDO::FETCH_COLUMN);
-            foreach ($updates as $key) {
-                try {
-                    if ($this->processUpdateByKey((string) $key)) {
-                        $result['updates']++;
-                    }
-                } catch (Throwable $exception) {
-                    $result['errors'][] = 'update ' . $key . ': ' . $exception->getMessage();
-                }
-            }
 
             $reconciliation = $this->reconcilePendingPublicationAttempts($limit);
             $result['reconciled'] += $reconciliation['reconciled'];
@@ -2272,7 +2264,8 @@ final class GitPostedMaxBot
     public function syncChannelById(
         string $chatId,
         string $ownerMaxId = '',
-        bool $allowExistingClaim = true
+        bool $allowExistingClaim = true,
+        ?array $expectedRegistrationData = null
     ): array
     {
         $chatId = trim($chatId);
@@ -2284,7 +2277,8 @@ final class GitPostedMaxBot
             fn (): array => $this->syncChannelByIdLocked(
                 $chatId,
                 $ownerMaxId,
-                $allowExistingClaim
+                $allowExistingClaim,
+                $expectedRegistrationData
             )
         );
     }
@@ -2292,7 +2286,8 @@ final class GitPostedMaxBot
     private function syncChannelByIdLocked(
         string $chatId,
         string $ownerMaxId,
-        bool $allowExistingClaim
+        bool $allowExistingClaim,
+        ?array $expectedRegistrationData = null
     ): array
     {
         $chatId = trim($chatId);
@@ -2323,10 +2318,12 @@ final class GitPostedMaxBot
             $title = 'МАКС ' . $chatId;
         }
         $snapshot = $this->pdo->prepare(
-            'SELECT added_by FROM posted_max_channels WHERE chat_id=:chat LIMIT 1'
+            'SELECT id,added_by FROM posted_max_channels WHERE chat_id=:chat LIMIT 1'
         );
         $snapshot->execute(['chat' => $chatId]);
-        $snapshotOwner = trim((string) ($snapshot->fetchColumn() ?: ''));
+        $snapshotChannel = $snapshot->fetch();
+        $snapshotChannelId = is_array($snapshotChannel) ? (int) $snapshotChannel['id'] : 0;
+        $snapshotOwner = trim((string) ($snapshotChannel['added_by'] ?? ''));
         $snapshotOwnerStatus = $snapshotOwner !== ''
             ? $this->channelManagerStatus($chatId, $snapshotOwner)
             : null;
@@ -2341,19 +2338,45 @@ final class GitPostedMaxBot
             'is_owner' => !empty($membership['is_owner']),
             'permissions' => $permissions,
         ]);
+        // Discover all actors before the transaction. Taking only the claimant
+        // row first can deadlock with a transfer which locks both accounts.
+        $revocationActors = $snapshotChannelId > 0 && $snapshotOwnerStatus === false
+            ? $this->maxChannelRevocationActorIds($snapshotChannelId, $snapshotOwner)
+            : null;
         $storedOwner = '';
         $isStoredOwner = false;
         $channelId = 0;
         $this->pdo->beginTransaction();
         try {
-            $locked = $this->pdo->prepare(
-                'SELECT * FROM posted_max_channels
-                 WHERE chat_id=:chat LIMIT 1 FOR UPDATE'
-            );
-            $locked->execute(['chat' => $chatId]);
-            $existing = $locked->fetch();
+            $existing = false;
+            if ($snapshotChannelId > 0) {
+                // Lock only a known row before actors. A missing chat lookup
+                // would gap-lock other new chat IDs and deadlock their INSERTs.
+                $locked = $this->pdo->prepare(
+                    'SELECT * FROM posted_max_channels
+                     WHERE id=:channel LIMIT 1 FOR UPDATE'
+                );
+                $locked->execute(['channel' => $snapshotChannelId]);
+                $existing = $locked->fetch();
+                if (!is_array($existing) || (string) $existing['chat_id'] !== $chatId) {
+                    throw new GitPostedMaxStaleInputException('Канал изменился во время проверки. Повторите подключение.');
+                }
+            }
+            if ($revocationActors !== null) {
+                $this->lockMaxChannelRevocationActors([...$revocationActors, $ownerMaxId]);
+            }
             if ($ownerMaxId !== '') {
                 $this->assertActiveMaxActorLocked($ownerMaxId);
+            }
+            if ($expectedRegistrationData !== null) {
+                $prompt=$this->pdo->prepare("SELECT max_user_id FROM posted_max_users WHERE max_user_id=:user AND is_active=1 AND state='await_channel_ref' AND state_data <=> CAST(:data AS JSON) LIMIT 1 FOR UPDATE");
+                $prompt->execute(['user'=>$ownerMaxId,'data'=>$this->encodeJson($expectedRegistrationData)]);
+                if ($prompt->fetchColumn() === false) {
+                    throw new GitPostedMaxStaleInputException('Ожидание подключения канала уже изменилось. Откройте добавление канала заново.');
+                }
+                if ($this->currentMaxUpdateEffect('channel_registration') !== null) {
+                    throw new GitPostedMaxStaleInputException('Подключение из этого сообщения уже обработано. Используйте последнее меню.');
+                }
             }
             if (!is_array($existing)) {
                 $storedOwner = $ownerVerified ? $ownerMaxId : '';
@@ -2365,20 +2388,31 @@ final class GitPostedMaxBot
                         (:chat,:title,:type,:status,:post,:edit,:pin,:delete,
                          :rights,NOW(),:owner,IF(:owner_checked=1,NOW(),NULL),:active)'
                 );
-                $insert->execute([
-                    'chat' => $chatId,
-                    'title' => mb_substr($title, 0, 255),
-                    'type' => (string) ($chat['type'] ?? ''),
-                    'status' => $status,
-                    'post' => $canPost ? 1 : 0,
-                    'edit' => $canEdit ? 1 : 0,
-                    'pin' => $canPin ? 1 : 0,
-                    'delete' => $canDelete ? 1 : 0,
-                    'rights' => $rightsJson,
-                    'owner' => $storedOwner !== '' ? $storedOwner : null,
-                    'owner_checked' => $ownerVerified ? 1 : 0,
-                    'active' => $active && $storedOwner !== '' ? 1 : 0,
-                ]);
+                try {
+                    $insert->execute([
+                        'chat' => $chatId,
+                        'title' => mb_substr($title, 0, 255),
+                        'type' => (string) ($chat['type'] ?? ''),
+                        'status' => $status,
+                        'post' => $canPost ? 1 : 0,
+                        'edit' => $canEdit ? 1 : 0,
+                        'pin' => $canPin ? 1 : 0,
+                        'delete' => $canDelete ? 1 : 0,
+                        'rights' => $rightsJson,
+                        'owner' => $storedOwner !== '' ? $storedOwner : null,
+                        'owner_checked' => $ownerVerified ? 1 : 0,
+                        'active' => $active && $storedOwner !== '' ? 1 : 0,
+                    ]);
+                } catch (PDOException $exception) {
+                    // The per-chat advisory lock serializes ordinary writers.
+                    // If another entry point inserted after our snapshot, roll
+                    // back and re-read on a new request; never claim it blindly
+                    // or acquire an existing channel row after the actor lock.
+                    if ((int) ($exception->errorInfo[1] ?? 0) === 1062) {
+                        throw new GitPostedMaxStaleInputException('Канал уже подключён другим действием. Повторите проверку канала.', 0, $exception);
+                    }
+                    throw $exception;
+                }
                 $channelId = (int) $this->pdo->lastInsertId();
                 $isStoredOwner = $ownerVerified && $storedOwner !== '';
             } else {
@@ -2394,10 +2428,15 @@ final class GitPostedMaxBot
                     ? $snapshotOwnerStatus
                     : null;
                 if ($storedOwner !== '' && $storedOwnerStatus === false) {
+                    if ($revocationActors === null || $channelId !== $snapshotChannelId
+                        || $this->maxChannelRevocationActorIds($channelId, $storedOwner) !== $revocationActors) {
+                        throw new RuntimeException('Участники канала изменились во время проверки. Повторите подключение.');
+                    }
                     $this->revokeMaxChannelAccessLocked(
                         $channelId,
                         $storedOwner,
-                        'Владелец больше не является администратором МАКС-канала.'
+                        'Владелец больше не является администратором МАКС-канала.',
+                        $revocationActors
                     );
                     $storedOwner = '';
                 }
@@ -2455,6 +2494,12 @@ final class GitPostedMaxBot
                     'DELETE FROM posted_max_permissions
                      WHERE max_user_id=:owner AND channel_id=:channel'
                 )->execute(['owner' => $ownerMaxId, 'channel' => $channelId]);
+            }
+            if ($expectedRegistrationData !== null) {
+                if (!$isStoredOwner) throw new RuntimeException('Подключить канал может только его действующий владелец или администратор.');
+                $this->pdo->prepare("UPDATE posted_max_users SET state=NULL,state_data=NULL WHERE max_user_id=:user AND state='await_channel_ref' AND state_data <=> CAST(:data AS JSON)")
+                    ->execute(['user'=>$ownerMaxId,'data'=>$this->encodeJson($expectedRegistrationData)]);
+                $this->completeMaxUpdateEffectLocked('channel_registration', static fn(): array => ['user_id'=>$ownerMaxId,'channel_id'=>$channelId,'chat_id'=>$chatId]);
             }
             $this->pdo->commit();
         } catch (Throwable $exception) {
@@ -2670,11 +2715,24 @@ final class GitPostedMaxBot
         $account = $this->user($userId);
         $state = (string) ($account['state'] ?? '');
         $stateData = $this->decodeJson((string) ($account['state_data'] ?? ''));
+        $contentMessage = $this->forwardedContentMessage($message) ?? $message;
+        ['text' => $text, 'html' => $textHtml] = $this->trimmedMessageContent($contentMessage);
+        // A delivered update keeps its original meaning after the user opens a
+        // new workflow. Consult its journal before the forwarded-channel path.
+        $savedInputEffect=$this->maxAccountTransferSavedEffect();
+        if (($savedInputEffect['effect_type']??'')==='account_transfer_ui') {
+            $this->handleMaxAccountTransferMessage($chatId,$userId,$text,$account);
+            return;
+        }
+        if (($savedInputEffect['effect_type']??'')==='channel_registration') {
+            if (!hash_equals((string)($savedInputEffect['result']['user_id']??''),$userId)) throw new RuntimeException('Сохранённое подключение относится к другому пользователю.');
+            $this->api->sendToUser($userId,'Подключение из этого сообщения уже обработано. Используйте последнее меню настроек.',[],[[GitPostedMaxApi::callbackButton('Настройки','gp:settings')]]);
+            return;
+        }
         $forwardedChannelId = $this->forwardedChatId($message);
-        if ($state === 'await_channel_ref' && $forwardedChannelId !== null) {
+        if ($state === 'await_channel_ref' && $forwardedChannelId !== null && $savedInputEffect === null) {
             try {
-                $channel = $this->syncChannelById($forwardedChannelId, $userId);
-                $this->setState($userId, null, []);
+                $channel = $this->syncChannelById($forwardedChannelId, $userId, true, $stateData);
                 $this->notifyChannelRegistration($userId, $channel);
             } catch (Throwable $exception) {
                 error_log('GitPosted MAX forwarded channel registration: ' . $exception->getMessage());
@@ -2698,8 +2756,6 @@ final class GitPostedMaxBot
             return;
         }
 
-        $contentMessage = $this->forwardedContentMessage($message) ?? $message;
-        ['text' => $text, 'html' => $textHtml] = $this->trimmedMessageContent($contentMessage);
         try {
             $attachments = $this->reusableAttachments($contentMessage);
         } catch (InvalidArgumentException $exception) {
@@ -2728,6 +2784,7 @@ final class GitPostedMaxBot
             return;
         }
 
+        if ($this->handleMaxAccountTransferMessage($chatId, $userId, $text, $account)) return;
         if ($this->handleMaxOptionsInput($chatId, $userId, $text, $message)
             || $this->handleMaxInteractiveInput($chatId, $userId, $text, $message)
             || $this->handleMaxCommentInput($chatId, $userId, $text, $message)) {
@@ -3605,7 +3662,11 @@ final class GitPostedMaxBot
             if($effect===null){
                 $effect=$this->completeMaxUpdateEffect(
                     'create_template',
-                    function()use($userId,$title,$templateText,$attachments):array{
+                    function()use($userId,$title,$templateText,$attachments,$stateData):array{
+                        $this->assertActiveMaxActorLocked($userId);
+                        $prompt=$this->pdo->prepare("SELECT max_user_id FROM posted_max_users WHERE max_user_id=:user AND state='await_template' AND state_data <=> CAST(:data AS JSON) LIMIT 1 FOR UPDATE");
+                        $prompt->execute(['user'=>$userId,'data'=>$this->encodeJson($stateData)]);
+                        if ($prompt->fetchColumn() === false) throw new GitPostedMaxStaleInputException('Ожидание шаблона уже изменилось. Откройте создание шаблона заново.');
                         $this->pdo->prepare(
                             "INSERT INTO posted_max_templates(
                                 owner_max_user_id,title,text,attachments_json
@@ -3622,6 +3683,8 @@ final class GitPostedMaxBot
                         if($templateId<=0){
                             throw new RuntimeException('Не удалось создать шаблон MAX.');
                         }
+                        $this->pdo->prepare("UPDATE posted_max_users SET state=NULL,state_data=NULL WHERE max_user_id=:user AND state='await_template' AND state_data <=> CAST(:data AS JSON)")
+                            ->execute(['user'=>$userId,'data'=>$this->encodeJson($stateData)]);
                         return ['template_id'=>$templateId,'owner_max_user_id'=>$userId];
                     }
                 );
@@ -3634,7 +3697,6 @@ final class GitPostedMaxBot
             ){
                 throw new RuntimeException('Сохранённый шаблон MAX недоступен.');
             }
-            $this->setState($userId, null, []);
             $this->sendTemplates($chatId, $userId);
             return;
         }
@@ -3668,6 +3730,7 @@ final class GitPostedMaxBot
         if ($callbackId === '' || $userId === '' || $chatId === '') {
             return;
         }
+        if ($this->handleMaxAccountTransferCallback($callbackId, $userId, $payload)) return;
         $this->draftCallbackContext = ['callback_id' => $callbackId, 'chat_id' => $chatId, 'message' => $this->extractMessage($update)];
         if (str_starts_with($payload, 'gp:react:') || str_starts_with($payload, 'gp:hidden:')) {
             $this->handleMaxInteractiveCallback($callbackId, $userId, $payload, $this->extractMessage($update));
@@ -4737,7 +4800,7 @@ final class GitPostedMaxBot
                 return;
             }
             if ($payload === 'gp:tplnew') {
-                $this->setState($userId, 'await_template', []);
+                $this->setState($userId, 'await_template', ['input_token'=>bin2hex(random_bytes(12))]);
                 $this->api->answerCallback(
                     $callbackId,
                     "Первая строка — название шаблона.\n"
@@ -4803,7 +4866,7 @@ final class GitPostedMaxBot
                 return;
             }
             if ($payload === 'gp:addchannel') {
-                $this->setState($userId, 'await_channel_ref', []);
+                $this->setState($userId, 'await_channel_ref', ['input_token'=>bin2hex(random_bytes(12))]);
                 $this->api->answerCallback(
                     $callbackId,
                     "➕ ДОБАВЛЕНИЕ КАНАЛА\n\n"
@@ -7462,6 +7525,7 @@ final class GitPostedMaxBot
             'gp:timezone'
         )];
         $rows[] = [GitPostedMaxApi::callbackButton('Продвинутые настройки', 'gp:advanced')];
+        $rows[] = [GitPostedMaxApi::callbackButton('♻️ Перенос данных', 'gp:transfer:open')];
         $rows[] = [GitPostedMaxApi::callbackButton('Главное меню', 'gp:menu')];
         return [
             "⚙️ НАСТРОЙКИ\n\n"
@@ -11856,34 +11920,88 @@ final class GitPostedMaxBot
         )->execute(array_diff_key($params, ['reason' => true]));
     }
 
+    /** Nonlocking discovery: call before beginning a revocation transaction. */
+    private function maxChannelRevocationActorIds(int $channelId, string $ownerMaxUserId): array
+    {
+        $actors = [$ownerMaxUserId];
+        $permissions = $this->pdo->prepare(
+            'SELECT max_user_id FROM posted_max_permissions WHERE channel_id=:channel ORDER BY max_user_id'
+        );
+        $permissions->execute(['channel' => $channelId]);
+        foreach ($permissions->fetchAll() as $permission) $actors[] = (string) $permission['max_user_id'];
+        $workflows = $this->pdo->prepare(
+            'SELECT actor.max_user_id
+             FROM posted_max_users actor
+             LEFT JOIN posted_max_posts state_post
+               ON state_post.id=CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(actor.state_data,\'$.post_id\')),\'\') AS UNSIGNED)
+              AND state_post.channel_id=:post_channel
+             WHERE actor.state IS NOT NULL AND actor.state<>\'\'
+               AND (CAST(JSON_UNQUOTE(JSON_EXTRACT(actor.state_data,\'$.channel_id\')) AS UNSIGNED)=:channel
+                 OR CAST(JSON_UNQUOTE(JSON_EXTRACT(actor.state_data,\'$.scope_id\')) AS UNSIGNED)=:scope_channel
+                 OR state_post.id IS NOT NULL)
+             ORDER BY actor.max_user_id'
+        );
+        $workflows->execute(['post_channel' => $channelId, 'channel' => $channelId, 'scope_channel' => $channelId]);
+        foreach ($workflows->fetchAll() as $workflow) $actors[] = (string) $workflow['max_user_id'];
+        $actors = array_values(array_unique(array_filter($actors, static fn(string $id): bool => $id !== '')));
+        sort($actors, SORT_STRING);
+        return $actors;
+    }
+
+    /** Lock inactive actors as well: revocation must preserve their unrelated state. */
+    private function lockMaxChannelRevocationActors(array $actorIds): void
+    {
+        if (!$this->pdo->inTransaction()) throw new RuntimeException('Проверка участников канала требует транзакции.');
+        $actorIds = array_values(array_unique(array_filter($actorIds, static fn(string $id): bool => $id !== '')));
+        sort($actorIds, SORT_STRING);
+        if ($actorIds === []) return;
+        $placeholders = [];
+        $params = [];
+        foreach ($actorIds as $index => $id) {
+            $key = 'revoke_actor_' . $index;
+            $placeholders[] = ':' . $key;
+            $params[$key] = $id;
+        }
+        $statement = $this->pdo->prepare(
+            'SELECT max_user_id FROM posted_max_users WHERE max_user_id IN ('
+                . implode(',', $placeholders) . ') ORDER BY max_user_id FOR UPDATE'
+        );
+        $statement->execute($params);
+        $statement->fetchAll();
+    }
+
     private function revokeMaxChannelAccessLocked(
         int $channelId,
         string $ownerMaxUserId,
-        string $reason
+        string $reason,
+        ?array $lockedActorIds = null
     ): void {
         if (!$this->pdo->inTransaction()) {
             throw new RuntimeException('Не удалось отозвать доступ к МАКС-каналу.');
         }
-        $this->pdo->prepare(
-            'UPDATE posted_max_users max_user
-             LEFT JOIN posted_max_permissions permission
-               ON permission.max_user_id=max_user.max_user_id
-              AND permission.channel_id=:channel
-             LEFT JOIN posted_max_posts state_post
-               ON state_post.id=CAST(
-                    NULLIF(JSON_UNQUOTE(JSON_EXTRACT(max_user.state_data,\'$.post_id\')),\'\')
-                    AS UNSIGNED
-                  )
-              AND state_post.channel_id=:channel2
-             SET max_user.state=NULL,max_user.state_data=NULL
-             WHERE max_user.max_user_id=:owner
-                OR permission.channel_id IS NOT NULL
-                OR state_post.id IS NOT NULL'
-        )->execute([
-            'channel' => $channelId,
-            'channel2' => $channelId,
-            'owner' => $ownerMaxUserId,
-        ]);
+        if ($lockedActorIds === null
+            || $this->maxChannelRevocationActorIds($channelId, $ownerMaxUserId) !== $lockedActorIds) {
+            throw new RuntimeException('Участники канала изменились. Повторите проверку доступа.');
+        }
+        // Ownership or an editor grant alone does not make a workflow belong
+        // to this channel. Keep unrelated transfer/template/new-post prompts.
+        foreach ($lockedActorIds as $actorId) {
+            $actor = $this->user($actorId);
+            $data = $this->decodeJson((string) ($actor['state_data'] ?? ''));
+            $related = (int) ($data['channel_id'] ?? 0) === $channelId
+                || (int) ($data['scope_id'] ?? 0) === $channelId;
+            $postId = (int) ($data['post_id'] ?? 0);
+            if (!$related && $postId > 0) {
+                $post = $this->pdo->prepare('SELECT 1 FROM posted_max_posts WHERE id=:post AND channel_id=:channel LIMIT 1');
+                $post->execute(['post' => $postId, 'channel' => $channelId]);
+                $related = $post->fetchColumn() !== false;
+            }
+            if (!$related || ($actor['state'] ?? null) === null) continue;
+            $this->pdo->prepare(
+                'UPDATE posted_max_users SET state=NULL,state_data=NULL
+                 WHERE max_user_id=:user AND state <=> :old_state AND state_data <=> CAST(:old_data AS JSON)'
+            )->execute(['user' => $actorId, 'old_state' => $actor['state'], 'old_data' => $actor['state_data'] ?? null]);
+        }
         // Do not resolve an in-flight publication here: its MAX delivery can
         // still be unknown. Pins which were never dispatched are settled while
         // the old quota rows still exist; recent/unknown pin calls are not
@@ -11925,9 +12043,11 @@ final class GitPostedMaxBot
         string $reason
     ): bool {
         $ownsTransaction = !$this->pdo->inTransaction();
-        if ($ownsTransaction) {
-            $this->pdo->beginTransaction();
-        }
+        // A caller which already holds actor rows cannot safely append another
+        // actor set in the required global order. Known callers run before TX.
+        if (!$ownsTransaction) throw new RuntimeException('Проверку владельца МАКС-канала нужно выполнить до изменения данных.');
+        $revocationActors = $this->maxChannelRevocationActorIds($channelId, $ownerMaxUserId);
+        $this->pdo->beginTransaction();
         try {
             $channel = $this->pdo->prepare(
                 'SELECT added_by FROM posted_max_channels
@@ -11941,7 +12061,11 @@ final class GitPostedMaxBot
                 }
                 return false;
             }
-            $this->revokeMaxChannelAccessLocked($channelId, $ownerMaxUserId, $reason);
+            $this->lockMaxChannelRevocationActors($revocationActors);
+            if ($this->maxChannelRevocationActorIds($channelId, $ownerMaxUserId) !== $revocationActors) {
+                throw new RuntimeException('Участники канала изменились во время проверки. Повторите проверку владельца.');
+            }
+            $this->revokeMaxChannelAccessLocked($channelId, $ownerMaxUserId, $reason, $revocationActors);
             $this->pdo->prepare(
                 'UPDATE posted_max_channels
                  SET is_active=0,added_by=NULL,owner_checked_at=NULL
@@ -12237,7 +12361,8 @@ final class GitPostedMaxBot
 
     private function completeMaxUpdateEffectLocked(
         string $effectType,
-        callable $operation
+        callable $operation,
+        bool $lockEffectRow = true
     ): array {
         if(!$this->pdo->inTransaction()){
             throw new RuntimeException('Фиксация действия MAX требует активной транзакции.');
@@ -12250,7 +12375,7 @@ final class GitPostedMaxBot
         }
         $existing=$this->pdo->prepare(
             'SELECT effect_type,result_json FROM posted_max_update_effects
-             WHERE update_key=:update_key LIMIT 1 FOR UPDATE'
+             WHERE update_key=:update_key LIMIT 1' . ($lockEffectRow ? ' FOR UPDATE' : '')
         );
         $existing->execute(['update_key'=>$updateKey]);
         $effect=$existing->fetch();

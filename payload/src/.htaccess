@@ -4,6 +4,6 @@ RewriteEngine On
 RewriteRule ^(?:ChatGPT|data|runtime|sessions|storage|subscriptions|tmp)(?:/|$) - [F,L,NC]
 RewriteRule ^tools(?:/|$) - [F,L,NC]
 
-<FilesMatch "^(account|admin-auth-policy|bootstrap|max-bootstrap|max-post-options|max-interactive|max-comments|max-rights|max-post-links|post-link|post-link-assets|telegram-native-forward|telegram-post-links|max-setup|config|cron|legal|public-site|setup|webhook-dedup)\.php$|(^\.|\.(json|sql|db|dump|bak|old|orig|log|ini|ya?ml|pem|key|pyc?)$)">
+<FilesMatch "^(account|admin-auth-policy|bootstrap|max-bootstrap|max-account-transfer|max-account-transfer-ui|telegram-account-transfer|telegram-account-transfer-ui|max-post-options|max-interactive|max-comments|max-rights|max-post-links|post-link|post-link-assets|telegram-native-forward|telegram-post-links|max-setup|config|cron|legal|public-site|setup|webhook-dedup)\.php$|(^\.|\.(json|sql|db|dump|bak|old|orig|log|ini|ya?ml|pem|key|pyc?)$)">
     Require all denied
 </FilesMatch>
