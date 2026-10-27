@@ -1615,6 +1615,8 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                     )->execute(['channel'=>$channelId]);
                     $pdo->prepare('DELETE FROM posted_permissions WHERE channel_id=:channel')
                         ->execute(['channel'=>$channelId]);
+                    $pdo->prepare('DELETE FROM posted_app_settings WHERE setting_key=:key')
+                        ->execute(['key'=>'telegram_channel_transfer_'.$channelId]);
                     $pdo->prepare(
                         'UPDATE posted_channels
                          SET added_by=NULL,is_active=0,admin_blocked=0,is_archived=0

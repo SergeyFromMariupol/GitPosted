@@ -935,6 +935,7 @@ final class PostedBot
     /** @var array<string, bool|null> */
     private array $telegramChannelAdminCache = [];
     private ?int $telegramBotIdCache = null;
+    private ?int $telegramTransferredBotIdCache = null;
 
     private const MAIN_KEYBOARD = [
         [
@@ -1853,7 +1854,19 @@ final class PostedBot
             'can_delete' => !empty($new['can_delete_messages']) ? 1 : 0,
             'added_by' => null,
         ];
-        $this->pdo->prepare($channelSql)->execute($channelParameters);
+        $ownsTransaction = !$this->pdo->inTransaction();
+        if ($ownsTransaction) $this->pdo->beginTransaction();
+        try {
+            $this->pdo->prepare($channelSql)->execute($channelParameters);
+            if (in_array($status, ['left', 'kicked'], true)) {
+                $removedChannel = $this->channelByChatId((string) ($chat['id'] ?? ''));
+                if (is_array($removedChannel)) $this->clearTelegramChannelTransferReceipt((int) $removedChannel['id']);
+            }
+            if ($ownsTransaction) $this->pdo->commit();
+        } catch (Throwable $exception) {
+            if ($ownsTransaction && $this->pdo->inTransaction()) $this->pdo->rollBack();
+            throw $exception;
+        }
         if (
             is_array($previousChannel)
             && !empty($previousChannel['bot_can_post'])
@@ -1896,6 +1909,9 @@ final class PostedBot
         if ($isAdministrator) {
             return;
         }
+        // A confirmed in-app transfer delegates this binding independently of
+        // the recipient's human Telegram role. Bot authority is checked at use.
+        if ($this->telegramTransferredChannelOwnerReceipt($channel) !== null) return;
         if (!$this->freezeTelegramChannelOwnership((int) $channel['id'], $memberId)) {
             return;
         }
@@ -2438,7 +2454,16 @@ final class PostedBot
                 return;
             }
             $this->clearState($userId);
-            $this->showDraftActions($userId, $postId, $minutes > 0 ? 'Автоудаление включено.' : 'Автоудаление выключено.');
+            $timerNotice=$minutes<=0?'Автоудаление выключено.':($minutes>self::TELEGRAM_MAX_AUTO_DELETE_MINUTES
+                ?'Сохранён срок ручного удаления: '.$this->telegramDeleteTimerLabel($minutes).'. Автоудаление после 48 часов недоступно.'
+                :'Автоудаление включено: '.$this->telegramDeleteTimerLabel($minutes).'.');
+            if($minutes>self::TELEGRAM_MAX_AUTO_DELETE_MINUTES){
+                // Single-message previews keep the publication text intact;
+                // their separate acknowledgement cannot live in prefixText.
+                $this->telegram->sendMessage($userId,$timerNotice);
+                $timerNotice='';
+            }
+            $this->showDraftActions($userId, $postId, $timerNotice);
             return;
         }
         if ($state === 'await_admin_id') {
@@ -8643,7 +8668,7 @@ final class PostedBot
         if ($minutes > self::TELEGRAM_MAX_AUTO_DELETE_MINUTES) {
             $this->telegram->sendMessage(
                 $userId,
-                "Telegram разрешает боту удалять публикации только раньше границы 48 часов.\n\nЯ сохраню таймер, но для такого срока потребуется ручное удаление. Бот напомнит об этом через контент-план."
+                'Сохранён срок ручного удаления: '.$this->telegramDeleteTimerLabel($minutes).".\n\n".$this->telegramDeleteTimerHint()
             );
         }
         $this->showManagedPost($userId, $postId);
@@ -9033,8 +9058,9 @@ final class PostedBot
             throw new RuntimeException('Выбор рекламной компании требует активной транзакции.');
         }
         $isManager=!empty($permission['is_ad_manager']);
+        $isOwner=$this->channelOwnerId($channelId)===$userId;
         if($requestedCategoryId>0){
-            if(!$isManager){
+            if(!$isManager&&!$isOwner){
                 throw new RuntimeException('Рекламная компания больше недоступна.');
             }
             $category=$this->pdo->prepare(
@@ -9053,6 +9079,9 @@ final class PostedBot
             }
             return $requestedCategoryId;
         }
+        // A transferred owner can retain historical advertising bookkeeping
+        // while creating ordinary owner posts without selecting a quota bucket.
+        if($isOwner)return null;
         if($isManager){
             $category=$this->pdo->prepare(
                 'SELECT id FROM posted_manager_categories
@@ -9069,6 +9098,7 @@ final class PostedBot
 
     private function activeTelegramManagerCategories(int $userId,int $channelId):array
     {
+        if($this->channelOwnerId($channelId)===$userId)return [];
         $stmt=$this->pdo->prepare(
             'SELECT category.* FROM posted_manager_categories category
              INNER JOIN posted_permissions permission
@@ -9140,8 +9170,7 @@ final class PostedBot
 
     private function startPostForChannel(int $userId,int $channelId,?array $target=null): void
     {
-        $stmt=$this->pdo->prepare('SELECT c.* FROM posted_manager_categories c INNER JOIN posted_permissions p ON p.user_id=c.user_id AND p.channel_id=c.channel_id AND p.is_ad_manager=1 WHERE c.user_id=:user AND c.channel_id=:channel AND c.is_active=1 ORDER BY c.id');
-        $stmt->execute(['user'=>$userId,'channel'=>$channelId]);$categories=$stmt->fetchAll();
+        $categories=$this->activeTelegramManagerCategories($userId,$channelId);
         if($categories!==[]){
             $rows=[];foreach($categories as $category){
                 $label=(string)$category['name'].' · '.$this->managerQuotaLabel($category['post_quota_remaining']??null,'постов').' / '.$this->managerQuotaLabel($category['pin_quota_remaining']??null,'закрепов');
@@ -9551,15 +9580,19 @@ final class PostedBot
             if (!isset($slots[$index])) return;
             $slot=$slots[$index];
             $text.='Экземпляр '.($index+1).' · '.$this->formatStoredForUser($userId,$slot['at'],'d.m.Y H:i')
-                ."\nЗакреп: ".(!empty($slot['pin'])?'да':'нет')."\nУдаление: ".$this->minutesLabel((int)$slot['delete']);
-            if ((int)$slot['delete']>self::TELEGRAM_MAX_AUTO_DELETE_MINUTES) $text.="\nДля срока от 48 часов Telegram потребует ручное удаление; бот напомнит.";
+                ."\nЗакреп: ".(!empty($slot['pin'])?'да':'нет')."\nУдаление: ".$this->telegramDeleteTimerLabel((int)$slot['delete']);
+            $text.="\n\n".$this->telegramDeleteTimerHint();
             if ($mode==='slot_time') $text.="\n\nОтправьте новую дату и время: ДД.ММ.ГГГГ ЧЧ:ММ.";
             if ($mode==='slot_delete') $text.="\n\nОтправьте срок: 6 — часов, 6:30, 2д или «нет».";
             $keyboard[]=[$button((empty($slot['pin'])?'☑️':'✅').' Закрепить','pin',(string)$index)];
             $keyboard[]=[$button('Изменить дату и время','slot_time',(string)$index)];
             foreach ([[0,60,360],[720,1440,2875]] as $values) {
                 $row=[];
-                foreach ($values as $value) $row[]=$button($this->minutesLabel($value),'timer',$index.':'.$value);
+                foreach ($values as $value) {
+                    $timerButton=$button($this->telegramDeleteTimerLabel($value),'timer',$index.':'.$value);
+                    if($this->normalizeTelegramDeleteTimerMinutes((int)$slot['delete'])===$value)$timerButton['style']='primary';
+                    $row[]=$timerButton;
+                }
                 $keyboard[]=$row;
             }
             $keyboard[]=[$button('Другой срок удаления','slot_delete',(string)$index)];
@@ -9574,7 +9607,7 @@ final class PostedBot
                     :'Создаются только дополнительные экземпляры; исходный пост и его повтор сохраняются.');
             foreach (array_slice($slots,$page*6,6,true) as $index=>$slot) {
                 $label=($index+1).'. '.$this->formatStoredForUser($userId,$slot['at'],'d.m.Y H:i')
-                    .' · '.(!empty($slot['pin'])?'📌':'без закрепа').' · 🗑 '.$this->minutesLabel((int)$slot['delete']);
+                    .' · '.(!empty($slot['pin'])?'📌':'без закрепа').' · 🗑 '.$this->telegramDeleteTimerLabel((int)$slot['delete']);
                 $keyboard[]=[$button($label,'slot',(string)$index)];
             }
             $navigation=[];
@@ -9710,7 +9743,7 @@ final class PostedBot
 
         $this->sendOrEditMessage($userId, '💼 НАСТРОЙКИ ОТПРАВКИ' . "\n\n" . 'Пост готов к публикации в канале ' . (string) ($post['channel_title'] ?? '') . '.', [
             'reply_markup' => ['inline_keyboard' => [
-                [['text' => 'Таймер удаления: ' . mb_strtolower($this->minutesLabel((int) ($post['delete_after_minutes'] ?? 0))), 'callback_data' => 'draft:delete_timer:' . $postId]],
+                [['text' => 'Таймер удаления: ' . mb_strtolower($this->telegramDeleteTimerLabel((int) ($post['delete_after_minutes'] ?? 0))), 'callback_data' => 'draft:delete_timer:' . $postId]],
                 [['text' => 'Автоповтор: ' . mb_strtolower($this->minutesLabel((int) ($post['repeat_interval_minutes'] ?? 0))), 'callback_data' => 'draft:repeat_timer:' . $postId]],
                 [['text' => '📅 Серия публикаций', 'callback_data' => 'series:open:' . $postId]],
                 [['text' => '⏰ Отложить', 'callback_data' => 'draft:schedule:' . $postId], ['text' => '🔥 Опубликовать', 'callback_data' => 'draft:send:' . $postId]],
@@ -9902,18 +9935,18 @@ final class PostedBot
         if(!$post||(string)$post['status']!=='draft')return;
         $this->setState($userId,'await_delete_timer',['post_id'=>$postId]);
         $p = 'draft:setdelete:' . $postId . ':';
-        $selected=(int)($post['delete_after_minutes']??0);
-        $button=static function(string $text,int $minutes,string $callback)use($selected):array{
-            $result=['text'=>$text,'callback_data'=>$callback];
+        $selected=$this->normalizeTelegramDeleteTimerMinutes((int)($post['delete_after_minutes']??0));
+        $button=function(int $minutes,string $callback)use($selected):array{
+            $result=['text'=>$this->telegramDeleteTimerLabel($minutes),'callback_data'=>$callback];
             if($selected===$minutes)$result['style']='primary';
             return $result;
         };
-        $this->sendOrEditMessage($userId, "🗑 ТАЙМЕР УДАЛЕНИЯ\n\nВы можете установить через какое время после выхода поста, он будет удалён.\n\nОтправьте боту время, через которое нужно удалить пост либо выберите один из предложенных вариантов.\n\n6 - удалить через 6 ч\n6:30 - удалить через 6 ч 30 мин\n6 30 - удалить через 6 ч 30 мин\n10д - удалить через 10 дней", [
+        $this->sendOrEditMessage($userId, "🗑 ТАЙМЕР УДАЛЕНИЯ\n\nВыберите срок после публикации или отправьте его сообщением.\n\n".$this->telegramDeleteTimerHint()."\n\n6 — через 6 ч\n6:30 или 6 30 — через 6 ч 30 мин\n2д — автоудаление ≈48 ч\n10д — напоминание удалить вручную через 10 дней", [
             'reply_markup' => ['inline_keyboard' => [
-                [$button('Нет',0,$p.'0'),$button('5 мин',5,$p.'5'),$button('15 мин',15,$p.'15'),$button('30 мин',30,$p.'30')],
-                [$button('1 ч',60,$p.'60'),$button('2 ч',120,$p.'120'),$button('4 ч',240,$p.'240'),$button('6 ч',360,$p.'360')],
-                [$button('12 ч',720,$p.'720'),$button('18 ч',1080,$p.'1080'),$button('24 ч',1440,$p.'1440'),$button('≈48 ч',self::TELEGRAM_MAX_AUTO_DELETE_MINUTES,$p.(string)self::TELEGRAM_MAX_AUTO_DELETE_MINUTES)],
-                [$button('3 д',4320,$p.'4320'),$button('5 д',7200,$p.'7200'),$button('7 д',10080,$p.'10080'),['text'=>'👁️','callback_data'=>'draft:delete_custom:'.$postId]],
+                [$button(0,$p.'0'),$button(5,$p.'5'),$button(15,$p.'15'),$button(30,$p.'30')],
+                [$button(60,$p.'60'),$button(120,$p.'120'),$button(240,$p.'240'),$button(360,$p.'360')],
+                [$button(720,$p.'720'),$button(1080,$p.'1080'),$button(1440,$p.'1440'),$button(self::TELEGRAM_MAX_AUTO_DELETE_MINUTES,$p.(string)self::TELEGRAM_MAX_AUTO_DELETE_MINUTES)],
+                [$button(4320,$p.'4320'),$button(7200,$p.'7200'),$button(10080,$p.'10080'),['text'=>'👁️','callback_data'=>'draft:delete_custom:'.$postId]],
                 [['text'=>(!empty($post['delete_report_enabled'])?'✅️':'☑️').' Прислать отчёт об удалении','callback_data'=>'draft:delete_report:'.$postId.':'.(empty($post['delete_report_enabled'])?1:0)]],
                 [['text' => '← Назад', 'callback_data' => 'draft:cancel_timer:' . $postId]],
             ]],
@@ -10421,7 +10454,7 @@ final class PostedBot
         $date=$post['scheduled_at']?$this->formatStoredForUser($userId,(string)$post['scheduled_at'],'Y-m-d'):$this->todayForUser($userId);
         $keyboard = [
             [['text' => 'Дублировать', 'callback_data' => 'cp:dup:' . $postId]],
-            [['text' => 'Таймер удаления: ' . $this->minutesLabel((int) ($post['delete_after_minutes'] ?? 0)), 'callback_data' => 'cp:timer:' . $postId]],
+            [['text' => 'Таймер удаления: ' . $this->telegramDeleteTimerLabel((int) ($post['delete_after_minutes'] ?? 0)), 'callback_data' => 'cp:timer:' . $postId]],
             [['text' => 'Автоповтор: ' . $this->minutesLabel((int) ($post['repeat_interval_minutes'] ?? 0)), 'callback_data' => 'cp:repeat:' . $postId]],
         ];
         if (in_array((string)$post['status'], ['draft','scheduled','failed','sent'], true)) {
@@ -10451,8 +10484,9 @@ final class PostedBot
             $this->telegram->sendMessage($userId, 'Нет доступа к посту.');
             return;
         }
-        $this->telegram->sendMessage($userId, "Таймер удаления\n\nВыберите, через какое время после публикации удалить пост.", [
-            'reply_markup' => ['inline_keyboard' => $this->minutesKeyboard('cp:settimer:' . $postId . ':', [0, 5, 15, 30, 60, 120, 240, 360, 720, 1080, 1440, self::TELEGRAM_MAX_AUTO_DELETE_MINUTES, 4320, 7200, 10080], 'cp:post:' . $postId)],
+        $post=$this->post($postId);
+        $this->telegram->sendMessage($userId, "Таймер удаления\n\nВыберите срок после публикации.\n\n".$this->telegramDeleteTimerHint(), [
+            'reply_markup' => ['inline_keyboard' => $this->telegramDeleteTimerKeyboard('cp:settimer:' . $postId . ':', [0, 5, 15, 30, 60, 120, 240, 360, 720, 1080, 1440, self::TELEGRAM_MAX_AUTO_DELETE_MINUTES, 4320, 7200, 10080], 'cp:post:' . $postId, (int)($post['delete_after_minutes']??0))],
         ]);
     }
 
@@ -10914,10 +10948,53 @@ final class PostedBot
             "Чтобы подключить канал:\n\n"
             . "1. Сделайте @" . $this->botUsername() . " администратором, дав следующие права:\n\n"
             . "✓ Отправка сообщений\n✓ Удаление сообщений\n✓ Редактирование сообщений\n\n"
-            . "2. Перешлите в диалог с ботом любое сообщение из канала.",
+            . "2. Отправьте ссылку https://t.me/username, @username или числовой ID канала (например, -1001234567890). Также можно переслать любое сообщение из канала.\n\n"
+            . "Для закрытого канала используйте ID или пересланное сообщение: пригласительная ссылка не подходит.\n\n"
+            . "GitPosted бесплатный — подписка для подключения и работы с каналом не нужна.",
             ['reply_markup' => ['inline_keyboard' => [[['text' => '← Назад', 'callback_data' => 'settings:root']]]]],
             $target
         );
+    }
+
+    private function telegramChannelRegistrationId(mixed $value): ?string
+    {
+        if (!is_int($value) && !is_string($value)) return null;
+        $id=(string)$value;
+        if (preg_match('/^-[1-9][0-9]{0,18}$/D',$id)!==1) return null;
+        $absolute=substr($id,1);
+        if (strlen($absolute)>19 || (strlen($absolute)===19 && strcmp($absolute,'9223372036854775808')>0)) return null;
+        return $id;
+    }
+
+    private function telegramChannelRegistrationReference(array $message): ?string
+    {
+        // A genuine forwarded channel origin identifies the channel even when
+        // the forwarded post's body contains a link to somewhere else.
+        $origin=$this->forwardedChannelOrigin($message);
+        if ($origin!==null) return $this->telegramChannelRegistrationId($origin['chat_id']);
+        if (!isset($message['text']) || !is_string($message['text'])) return null;
+        $text=trim($message['text']);
+        if ($text==='' || strlen($text)>256) return null;
+        $id=$this->telegramChannelRegistrationId($text);
+        if ($id!==null) return $id;
+        if (preg_match('/^@([A-Za-z][A-Za-z0-9_]{3,31})$/D',$text,$match)===1) return '@'.$match[1];
+        if (preg_match('~^(?:https?://)?t\\.me/([A-Za-z][A-Za-z0-9_]{3,31})/?$~iD',$text,$match)!==1) return null;
+        if (in_array(strtolower($match[1]),['joinchat','addstickers','addemoji','share','proxy','socks','iv','login','confirmphone','setlanguage'],true)) return null;
+        return '@'.$match[1];
+    }
+
+    private function telegramChannelRegistrationUsernameMatches(array $chat,string $requested): bool
+    {
+        $names=[];
+        if (is_string($chat['username']??null)) $names[]=$chat['username'];
+        // A channel may resolve through an active additional username, while
+        // its primary username is different or absent in ChatFullInfo.
+        if (is_array($chat['active_usernames']??null)) $names=[...$names,...$chat['active_usernames']];
+        foreach ($names as $name) {
+            if (is_string($name) && preg_match('/^[A-Za-z][A-Za-z0-9_]{3,31}$/D',$name)===1
+                && strcasecmp($requested,$name)===0) return true;
+        }
+        return false;
     }
 
     private function registerChannelFromMessage(int $userId, array $message, array $expectedStateData): void
@@ -10928,33 +11005,47 @@ final class PostedBot
         );
         $current->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
         if ($current->fetchColumn() === false) return;
-        $origin = $this->forwardedChannelOrigin($message);
-        if ($origin === null) {
-            $this->telegram->sendMessage($userId, 'Перешлите боту любое сообщение из канала, который хотите подключить.');
+        $chatRef=$this->telegramChannelRegistrationReference($message);
+        if ($chatRef===null) {
+            $this->telegram->sendMessage($userId, 'Отправьте ссылку вида https://t.me/username, @username, числовой ID канала со знаком минус или пересланное сообщение из канала. Для закрытого канала нужны ID или пересланное сообщение; пригласительная ссылка не подходит.');
             return;
         }
-        $chatRef = (string)$origin['chat_id'];
 
         try {
             $chatResult = $this->telegram->call('getChat', ['chat_id' => $chatRef]);
             $chat = (array) ($chatResult['result'] ?? []);
         } catch (Throwable $exception) {
-            $this->telegram->sendMessage($userId, 'Не удалось найти канал. Проверьте, что бот уже добавлен администратором: ' . $exception->getMessage());
+            $this->telegram->sendMessage($userId, 'Не удалось найти канал. Проверьте ссылку или ID и убедитесь, что бот уже добавлен администратором.');
             return;
         }
-        $chatId = (string) ($chat['id'] ?? '');
-        if ($chatId === '') { $this->telegram->sendMessage($userId, 'Telegram не вернул ID канала.'); return; }
+        $chatId=$this->telegramChannelRegistrationId($chat['id']??null);
+        if (($chatResult['ok']??null)!==true || ($chat['type']??null)!=='channel' || $chatId===null) {
+            $this->telegram->sendMessage($userId, 'Telegram не подтвердил канал. Отправьте ссылку, @username или ID именно канала; личные аккаунты и группы не подходят.');
+            return;
+        }
+        if (($chatRef[0]==='@' && !$this->telegramChannelRegistrationUsernameMatches($chat,ltrim($chatRef,'@')))
+            || ($chatRef[0]!=='@' && $chatRef!==$chatId)) {
+            $this->telegram->sendMessage($userId, 'Telegram вернул другой канал. Проверьте ссылку или ID и попробуйте подключить канал заново.');
+            return;
+        }
 
         try {
             $me = $this->telegram->call('getMe');
-            $botId = (int) ($me['result']['id'] ?? 0);
+            $botIdentity=$me['result']??null;
+            if (($me['ok']??null)!==true || !is_array($botIdentity) || !is_int($botIdentity['id']??null)
+                || $botIdentity['id']<=0 || ($botIdentity['is_bot']??null)!==true) {
+                $this->telegram->sendMessage($userId,'Telegram не подтвердил личность бота. Попробуйте подключить канал позже.');
+                return;
+            }
+            $botId=$botIdentity['id'];
             $botResult = $this->telegram->call('getChatMember', ['chat_id'=>$chatId,'user_id'=>$botId]);
             $bot = (array) ($botResult['result'] ?? []);
             $status = (string) ($bot['status'] ?? '');
-            $canPost = !empty($bot['can_post_messages']) ? 1 : 0;
-            $canEdit = !empty($bot['can_edit_messages']) ? 1 : 0;
-            $canDelete = !empty($bot['can_delete_messages']) ? 1 : 0;
-            if ($status !== 'administrator' || !$canPost || !$canEdit || !$canDelete) {
+            $canPost = ($bot['can_post_messages']??null)===true ? 1 : 0;
+            $canEdit = ($bot['can_edit_messages']??null)===true ? 1 : 0;
+            $canDelete = ($bot['can_delete_messages']??null)===true ? 1 : 0;
+            if (($botResult['ok']??null)!==true || ($bot['user']['id']??null)!==$botId || ($bot['user']['is_bot']??null)!==true
+                || $status !== 'administrator' || !$canPost || !$canEdit || !$canDelete) {
                 $this->telegram->sendMessage($userId, 'Боту нужны права администратора на отправку, редактирование и удаление сообщений. Выдайте все три права и попробуйте снова.');
                 return;
             }
@@ -10962,7 +11053,7 @@ final class PostedBot
             $member=(array)($memberResult['result']??[]);
             $memberStatus=(string)($member['status']??'');
         } catch (Throwable $exception) {
-            $this->telegram->sendMessage($userId,'Не удалось проверить права в канале: '.$exception->getMessage());
+            $this->telegram->sendMessage($userId,'Не удалось проверить права в канале. Проверьте права бота и повторите подключение позже.');
             return;
         }
         $existing=$this->channelByChatId($chatId);
@@ -10970,7 +11061,8 @@ final class PostedBot
         $existingOwnerIsAdministrator = null;
         $freezePermissionIds = null;
         $actorIds = [$userId];
-        if (!in_array($memberStatus, ['creator', 'administrator'], true)) {
+        if (($memberResult['ok']??null)!==true || ($member['user']['id']??null)!==$userId || ($member['user']['is_bot']??null)!==false
+            || !in_array($memberStatus, ['creator', 'administrator'], true)) {
             $this->telegram->sendMessage(
                 $userId,
                 'Подключить канал может только его владелец или администратор.'
@@ -10978,10 +11070,9 @@ final class PostedBot
             return;
         }
         if ($existingOwner > 0 && $existingOwner !== $userId) {
-            $existingOwnerIsAdministrator=$this->telegramChannelAdministratorStatus(
-                $chatId,
-                $existingOwner
-            );
+            $existingOwnerIsAdministrator=$this->telegramTransferredChannelOwnerReceipt($existing) !== null
+                ? true
+                : $this->telegramChannelAdministratorStatus($chatId,$existingOwner);
             if($existingOwnerIsAdministrator===null){
                 $this->telegram->sendMessage(
                     $userId,
@@ -11044,6 +11135,9 @@ final class PostedBot
             }
             $lockedOwner = is_array($lockedExisting) ? (int)($lockedExisting['added_by']??0) : 0;
             if ($lockedOwner > 0 && $lockedOwner !== $userId) {
+                if ($this->telegramTransferredChannelOwnerReceipt($lockedExisting) !== null) {
+                    throw new RuntimeException('У этого канала уже назначен другой действующий владелец GitPosted.');
+                }
                 if ($lockedOwner !== $existingOwner || $existingOwnerIsAdministrator !== false) {
                     throw new RuntimeException('Владелец канала изменился. Подключите канал заново.');
                 }
@@ -11080,6 +11174,8 @@ final class PostedBot
             if ((int) ($channel['added_by'] ?? 0) !== $userId) {
                 throw new RuntimeException('Channel already has another GitPosted owner.');
             }
+            // A new human-admin registration starts a fresh authority binding.
+            $this->clearTelegramChannelTransferReceipt((int) $channel['id']);
             $this->grant($userId,(int)$channel['id'],true,true,true,true,$userId);
             $consume=$this->pdo->prepare(
                 "UPDATE posted_users SET state=NULL,state_data=NULL WHERE telegram_id=:user
@@ -11105,7 +11201,10 @@ final class PostedBot
             . "✓ Удаление сообщений\n"
             . "✓ Редактирование сообщений\n\n"
             . $ownerText,
-            ['reply_markup' => ['inline_keyboard' => $keyboard]]
+            [
+                'message_effect_id' => '5046509860389126442',
+                'reply_markup' => ['inline_keyboard' => $keyboard],
+            ]
         );
     }
     private function userTimezone(int $userId): string
@@ -11744,7 +11843,7 @@ final class PostedBot
     {
         $c=$this->channel($channelId); if(!$c||!$this->can($userId,$channelId,'manage_admins'))return;
         $kb=[
-            [['text'=>'Таймер удаления: '.($c['ad_delete_minutes']?$this->minutesLabel((int)$c['ad_delete_minutes']):'нет'),'callback_data'=>'chad:timer:'.$channelId]],
+            [['text'=>'Таймер удаления: '.($c['ad_delete_minutes']?$this->telegramDeleteTimerLabel((int)$c['ad_delete_minutes']):'нет'),'callback_data'=>'chad:timer:'.$channelId]],
             [['text'=>'Автоподпись: '.(!empty($c['ad_autosignature'])?'да':'нет'),'callback_data'=>'chad:autosignature:'.$channelId],['text'=>!empty($c['ad_silent'])?'🔕':'🔔','callback_data'=>'chad:silent:'.$channelId.':'.(empty($c['ad_silent'])?1:0)]],
             [['text'=>(!empty($c['ad_pin'])?'✅️':'☑️').' Закрепить','callback_data'=>'chad:pin:'.$channelId.':'.(empty($c['ad_pin'])?1:0)]],
             [['text'=>'🗑️ Удалить','callback_data'=>'chad:delete:'.$channelId]],
@@ -11759,11 +11858,11 @@ final class PostedBot
         $c=$this->channel($channelId);if(!$c||!$this->can($userId,$channelId,'manage_admins'))return;
         $this->setState($userId,'await_channel_ad_timer',['channel_id'=>$channelId]);
         $values=[0,5,15,30,60,120,240,360,720,1080,1440,2875,4320,7200,10080,14400];
-        $labels=['Нет','5 мин','15 мин','30 мин','1 ч','2 ч','4 ч','6 ч','12 ч','18 ч','24 ч','48 ч','3 д','5 д','7 д','10 д'];
+        $selected=$this->normalizeTelegramDeleteTimerMinutes((int)($c['ad_delete_minutes']??0));
         $rows=[];
-        foreach(array_chunk(array_keys($values),4) as $indexes){$row=[];foreach($indexes as $i){$button=['text'=>$labels[$i],'callback_data'=>'chad:settimer:'.$channelId.':'.$values[$i]];if(($c['ad_delete_minutes']===null&&$values[$i]===0)||(int)$c['ad_delete_minutes']===$values[$i])$button['style']='primary';$row[]=$button;}$rows[]=$row;}
+        foreach(array_chunk($values,4) as $chunk){$row=[];foreach($chunk as $value){$button=['text'=>$this->telegramDeleteTimerLabel($value),'callback_data'=>'chad:settimer:'.$channelId.':'.$value];if($selected===$value)$button['style']='primary';$row[]=$button;}$rows[]=$row;}
         $rows[]=[['text'=>'← Назад','callback_data'=>'channel_ad_settings:'.$channelId]];
-        $text="🗑 ТАЙМЕР УДАЛЕНИЯ РЕКЛАМЫ\n\nВы можете установить через какое время после выхода рекламного поста, он будет удалён.\n\nОтправьте боту время, через которое нужно удалить рекламу либо выберите один из предложенных вариантов.\n\n6 - удалить через 6 ч\n6:30 - удалить через 6 ч 30 мин\n6 30 - удалить через 6 ч 30 мин\n10д - удалить через 10 дней";
+        $text="🗑 ТАЙМЕР УДАЛЕНИЯ РЕКЛАМЫ\n\nВыберите срок после публикации или отправьте его сообщением.\n\n".$this->telegramDeleteTimerHint()."\n\n6 — через 6 ч\n6:30 или 6 30 — через 6 ч 30 мин\n2д — автоудаление ≈48 ч\n10д — напоминание удалить вручную через 10 дней";
         $this->sendOrEditMessage($userId,$text,['reply_markup'=>['inline_keyboard'=>$rows]],$target);
     }
 
@@ -11866,6 +11965,9 @@ final class PostedBot
                 'delete'=>!empty($bot['can_delete_messages'])?1:0,
                 'id'=>$channelId,
             ]);
+            if (in_array((string) ($bot['status'] ?? ''), ['left', 'kicked'], true)) {
+                $this->clearTelegramChannelTransferReceipt($channelId);
+            }
             $this->grant($userId,$channelId,true,true,true,true,$userId);
             $this->pdo->prepare(
                 'UPDATE posted_permissions
@@ -12372,6 +12474,7 @@ final class PostedBot
                 if ($detach->rowCount() !== 1) {
                     throw new RuntimeException('Владелец канала изменился во время отключения.');
                 }
+                $this->clearTelegramChannelTransferReceipt($channelId);
                     $this->pdo->commit();
                 } catch (Throwable $exception) {
                     if ($this->pdo->inTransaction()) {
@@ -13560,7 +13663,7 @@ final class PostedBot
         $delete = (int) ($post['delete_after_minutes'] ?? 0);
         $repeat = (int) ($post['repeat_interval_minutes'] ?? 0);
         if ($delete > 0) {
-            $parts[] = '🗑' . $this->shortMinutesLabel($delete);
+            $parts[] = '🗑' . $this->telegramDeleteTimerLabel($delete);
         }
         if ($repeat > 0) {
             $parts[] = '🔁' . $this->shortMinutesLabel($repeat);
@@ -13669,6 +13772,39 @@ final class PostedBot
             return (int) ($minutes / 60) . ' ч';
         }
         return $minutes . ' мин';
+    }
+
+    private function telegramDeleteTimerLabel(int $minutes): string
+    {
+        // The stored two-day preset deliberately leaves time for the minute
+        // cron. This is presentation only; repeat intervals keep exact values.
+        $minutes=$this->normalizeTelegramDeleteTimerMinutes($minutes);
+        if($minutes===self::TELEGRAM_MAX_AUTO_DELETE_MINUTES)return '≈48 ч';
+        $label=$this->minutesLabel($minutes);
+        return $minutes>self::TELEGRAM_MAX_AUTO_DELETE_MINUTES?$label.' · вручную':$label;
+    }
+
+    private function telegramDeleteTimerHint(): string
+    {
+        return 'Автоудаление Telegram доступно только раньше 48 часов. '
+            .'«≈48 ч» — это 47 ч 55 мин: 5 минут запаса на работу бота. '
+            .'Большие сроки — напоминание удалить пост вручную, без автоудаления.';
+    }
+
+    private function telegramDeleteTimerKeyboard(string $prefix,array $values,string $backCallback,?int $selected=null):array
+    {
+        $selected=$selected===null?null:$this->normalizeTelegramDeleteTimerMinutes($selected);
+        $keyboard=[];$row=[];
+        foreach($values as$value){
+            $value=(int)$value;
+            $button=['text'=>$this->telegramDeleteTimerLabel($value),'callback_data'=>$prefix.$value];
+            if($selected!==null&&$selected===$this->normalizeTelegramDeleteTimerMinutes($value))$button['style']='primary';
+            $row[]=$button;
+            if(count($row)===3){$keyboard[]=$row;$row=[];}
+        }
+        if($row!==[])$keyboard[]=$row;
+        $keyboard[]=[['text'=>'← Назад','callback_data'=>$backCallback]];
+        return $keyboard;
     }
 
     private function shortMinutesLabel(int $minutes): string
@@ -13929,6 +14065,70 @@ final class PostedBot
         }
     }
 
+    private function telegramTransferredChannelOwnerReceipt(array $channel): ?array
+    {
+        $channelId = (int) ($channel['id'] ?? 0);
+        if ($channelId <= 0) return null;
+        $statement = $this->pdo->prepare(
+            'SELECT setting_value FROM posted_app_settings WHERE setting_key=:key LIMIT 1'
+        );
+        $statement->execute(['key'=>'telegram_channel_transfer_' . $channelId]);
+        return PostedTelegramAccountTransfer::channelTransferMarker($channel, $statement->fetchColumn());
+    }
+
+    private function clearTelegramChannelTransferReceipt(int $channelId): void
+    {
+        if ($channelId <= 0) return;
+        $this->pdo->prepare('DELETE FROM posted_app_settings WHERE setting_key=:key')
+            ->execute(['key'=>'telegram_channel_transfer_' . $channelId]);
+    }
+
+    private function ensureTelegramTransferredChannelBotAuthority(array $channel, array $receipt): bool
+    {
+        try {
+            if ($this->telegramTransferredBotIdCache === null) {
+                $me = (array) (($this->telegram->call('getMe'))['result'] ?? []);
+                $this->telegramTransferredBotIdCache = is_int($me['id'] ?? null)
+                    && $me['id'] > 0 && ($me['is_bot'] ?? null) === true ? $me['id'] : 0;
+            }
+            $botId = $this->telegramTransferredBotIdCache;
+            if ($botId <= 0) return false;
+            $member = (array) (($this->telegram->call('getChatMember', [
+                'chat_id'=>(string) $channel['chat_id'], 'user_id'=>$botId,
+            ]))['result'] ?? []);
+            $identity = (array) ($member['user'] ?? []);
+            if (($identity['id'] ?? null) !== $botId || ($identity['is_bot'] ?? null) !== true) return false;
+            $status = (string) ($member['status'] ?? '');
+            if (in_array($status, ['left', 'kicked'], true)) {
+                // A confirmed removal ends this delegated binding. Keep queued
+                // content, but never let a later bot re-add revive an old receipt.
+                $ownsTransaction = !$this->pdo->inTransaction();
+                if ($ownsTransaction) $this->pdo->beginTransaction();
+                try {
+                    $statement = $this->pdo->prepare('SELECT * FROM posted_channels WHERE id=:id LIMIT 1 FOR UPDATE');
+                    $statement->execute(['id'=>(int) $channel['id']]);
+                    $current = $statement->fetch();
+                    if (is_array($current) && $this->telegramTransferredChannelOwnerReceipt($current) === $receipt) {
+                        $this->pdo->prepare(
+                            'UPDATE posted_channels SET is_active=0,bot_status=:status,bot_can_post=0 WHERE id=:id'
+                        )->execute(['status'=>$status,'id'=>(int) $channel['id']]);
+                        $this->clearTelegramChannelTransferReceipt((int) $channel['id']);
+                    }
+                    if ($ownsTransaction) $this->pdo->commit();
+                } catch (Throwable $exception) {
+                    if ($ownsTransaction && $this->pdo->inTransaction()) $this->pdo->rollBack();
+                    throw $exception;
+                }
+                return false;
+            }
+            return $status === 'administrator' && ($member['can_post_messages'] ?? null) === true;
+        } catch (Throwable $exception) {
+            // Unknown API outcomes do not revoke ownership or cancel schedules.
+            error_log('GitPosted could not verify transferred channel bot authority: ' . get_class($exception));
+            return false;
+        }
+    }
+
     private function ensureTelegramChannelTenure(int $channelId, ?int $expectedOwnerId = null): bool
     {
         if ($channelId <= 0) {
@@ -13942,6 +14142,8 @@ final class PostedBot
         if ($ownerId <= 0 || ($expectedOwnerId !== null && $ownerId !== $expectedOwnerId)) {
             return false;
         }
+        $receipt = $this->telegramTransferredChannelOwnerReceipt($channel);
+        if ($receipt !== null) return $this->ensureTelegramTransferredChannelBotAuthority($channel, $receipt);
         $isAdministrator = $this->telegramChannelAdministratorStatus(
             (string) ($channel['chat_id'] ?? ''),
             $ownerId
@@ -13979,11 +14181,11 @@ final class PostedBot
             if($channelId<=0||$ownerId<=0){
                 continue;
             }
-            $isAdministrator=$this->telegramChannelAdministratorStatus(
-                (string)($channel['chat_id']??''),
-                $ownerId
-            );
-            if($isAdministrator===false){
+            $transferred = $this->telegramTransferredChannelOwnerReceipt($channel) !== null;
+            $isAdministrator = $transferred
+                ? $this->ensureTelegramChannelTenure($channelId, $ownerId)
+                : $this->telegramChannelAdministratorStatus((string) ($channel['chat_id'] ?? ''), $ownerId);
+            if(!$transferred && $isAdministrator===false){
                 if(!$this->freezeTelegramChannelOwnership($channelId,$ownerId)){
                     error_log(
                         'GitPosted could not detach stale Telegram owner '
@@ -14027,6 +14229,7 @@ final class PostedBot
                 }
                 return false;
             }
+            $this->clearTelegramChannelTransferReceipt($channelId);
             $permissionUsers = $this->pdo->prepare(
                 'SELECT user_id FROM posted_permissions WHERE channel_id=:channel'
             );
