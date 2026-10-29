@@ -1689,7 +1689,7 @@ final class PostedBot
             return;
         }
         if (str_starts_with($data, 'tpl_scope:')) {
-            $this->showTemplateList($userId, (int) substr($data, strlen('tpl_scope:')));
+            $this->showTemplateList($userId, (int) substr($data, strlen('tpl_scope:')), $target);
             return;
         }
         if (str_starts_with($data, 'tpl_create:')) {
@@ -11114,7 +11114,7 @@ final class PostedBot
         );
     }
 
-    private function showTemplateList(int $userId, int $scopeId): void
+    private function showTemplateList(int $userId, int $scopeId, ?array $target = null): void
     {
         if ($scopeId > 0 && !$this->can($userId, $scopeId, 'post')) {
             $this->telegram->sendMessage($userId, 'Нет доступа к шаблонам этого канала.');
@@ -11148,7 +11148,7 @@ final class PostedBot
             $text .= 'Выберите шаблон или создайте новый.';
         }
 
-        $this->telegram->sendMessage($userId, $text, ['parse_mode' => 'HTML', 'reply_markup' => ['inline_keyboard' => $keyboard]]);
+        $this->sendOrEditMessage($userId, $text, ['parse_mode' => 'HTML', 'reply_markup' => ['inline_keyboard' => $keyboard]], $target);
     }
 
     private function startTemplateCreate(int $userId, int $scopeId): void

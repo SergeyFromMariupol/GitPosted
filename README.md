@@ -72,7 +72,12 @@ Telegram bot (@posted), with Telegram and MAX support, scheduled posts,
 recurring publications, independent post duplicates and account data transfer
 within the same platform.
 
-## Выпуск 0.1.4
+## Выпуск 0.1.5
+
+Переход к списку шаблонов канала обновляет текущее сообщение меню Telegram,
+как у Posted. Содержимое шаблонов и проверки доступа сохранены.
+
+## Предыдущий выпуск 0.1.4
 
 После успешного отключения комментариев в черновике Telegram появляется
 окно с напоминанием о правах бота в группе обсуждения, как у Posted.
