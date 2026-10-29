@@ -243,7 +243,7 @@ trait GitPostedTelegramDraftUi
             if(!$this->telegramPostInlineButtonsAllowed($post)||$this->isNativeRepost($post))return false;
             $this->pdo->prepare("UPDATE posted_posts SET buttons_json=NULL WHERE id=? AND status='draft'")->execute([$postId]);
             $user=$this->user($actor);$state=$user['state']??null;$data=$this->stateData($user);
-            if(in_array($state,['await_buttons','await_reactions','await_hidden_label','await_hidden_text','await_hidden_nonmember'],true)&&(int)($data['post_id']??0)===$postId)$this->clearTelegramRepostInputIfCurrent($actor,$state,$data);
+            if(in_array($state,['await_buttons','await_reactions','await_hidden_label','await_hidden_text','await_hidden_nonmember','await_hidden_edit'],true)&&(int)($data['post_id']??0)===$postId)$this->clearTelegramRepostInputIfCurrent($actor,$state,$data);
             return true;
         });
         if($saved===true)$this->showDraftActions($actor,$postId,'',$target);

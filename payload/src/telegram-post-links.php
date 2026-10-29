@@ -572,7 +572,7 @@ trait GitPostedTelegramPostLinks
         return in_array($state, [
             'collecting_media_group', 'await_draft_text', 'await_draft_media',
             'await_reply_post', 'await_reactions', 'await_hidden_label',
-            'await_hidden_text', 'await_hidden_nonmember', 'await_replace_links', 'await_buttons',
+            'await_hidden_text', 'await_hidden_nonmember', 'await_hidden_edit', 'await_replace_links', 'await_buttons',
         ], true);
     }
 }
