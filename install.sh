@@ -3,8 +3,8 @@
 set -euo pipefail
 umask 077
 
-BUNDLE_URL='https://github.com/SergeyFromMariupol/GitPosted/releases/download/v0.1.0/gitposted-installer.tar.gz'
-BUNDLE_SHA256='a4c96d4d8cd3b3aefeec00b241082b1dee631bc8c1da479d178392296f3525fd'
+BUNDLE_URL='https://github.com/SergeyFromMariupol/GitPosted/releases/download/v0.1.1/gitposted-installer.tar.gz'
+BUNDLE_SHA256='a04f2d74a11fb2d2d17a3655ced048dcbf3009a3aec768f908f60e27b7b5539f'
 
 if [[ ${EUID} -ne 0 ]]; then
   echo 'Run the installer with sudo bash (or as root).' >&2
