@@ -37,7 +37,7 @@ trait GitPostedTelegramDraftUi
             }
             if (str_starts_with($firstData, 'draft:pin:')) {
                 $row[0]['text'] = !empty($post['pin_after_publish']) ? '✅️ Закрепить' : '☑️ Закрепить';
-                array_unshift($row,['text'=>!empty($post['comments_enabled'])?'✅ Комментарии':'☑️ Комментарии','callback_data'=>'draft:comments:'.$postId.':'.(empty($post['comments_enabled'])?1:0)]);
+                array_unshift($row,['text'=>!empty($post['comments_enabled'])?'✅️ Комментарии':'☑️ Комментарии','callback_data'=>'draft:comments:'.$postId.':'.(empty($post['comments_enabled'])?1:0)]);
             }
             $isAdvanced = false;
             foreach ($row as $button) {
@@ -132,7 +132,23 @@ trait GitPostedTelegramDraftUi
         if($this->pdo->inTransaction()||!is_int($actor)||$actor<1||!is_array($chat)||($chat['type']??null)!=='private'||($chat['id']??null)!==$actor
             ||preg_match('/\Adraft:(?:more:([1-9][0-9]{0,18})|comments:([1-9][0-9]{0,18}):[01](?::expanded)?)\z/D',$raw,$m)!==1)return true;
         $id=($m[1]??'')!==''?$m[1]:($m[2]??'');if((string)(int)$id!==$id)return true;
-        $this->answerCallback($callback);$this->handleDraftCallback($actor,$raw,$this->callbackTarget($callback));return true;
+        if(str_starts_with($raw,'draft:more:')){
+            $this->answerCallback($callback);$this->handleDraftCallback($actor,$raw,$this->callbackTarget($callback));return true;
+        }
+        $commentsDisabled=false;
+        try{
+            $this->handleDraftCallback($actor,$raw,$this->callbackTarget($callback),$commentsDisabled);
+        }finally{
+            // A successful save can precede a failed preview refresh. Acknowledge the save once.
+            if($commentsDisabled){
+                try{$this->telegram->call('answerCallbackQuery',[
+                    'callback_query_id'=>(string)($callback['id']??''),
+                    'text'=>"☑️ Комментарии отключены.\n\nДля корректной работы дайте боту @".$this->botUsername()." право на удаление сообщений в прикрепленном к каналу чате.",
+                    'show_alert'=>true,
+                ]);}catch(Throwable){}
+            }else $this->answerCallback($callback);
+        }
+        return true;
     }
 
     /** Reuses the reviewed fixed-path reader capability check; never reads a message. */
@@ -169,8 +185,9 @@ trait GitPostedTelegramDraftUi
         return['channel_id'=>(int)$channel['id'],'chat_id'=>$chat,'owner_id'=>(int)$channel['added_by'],'author_id'=>(int)$post['author_id'],'comments_enabled'=>(int)$post['comments_enabled'],'checked_at'=>$started];
     }
 
-    private function setTelegramDraftComments(int $actor,int $postId,?int $desired,?array $target): void
+    private function setTelegramDraftComments(int $actor,int $postId,?int $desired,?array $target,?bool &$commentsDisabled=null): void
     {
+        $commentsDisabled=false;
         if($this->pdo->inTransaction()||!in_array($desired,[0,1],true)||$target===null||($target['chat_id']??null)!==$actor||!is_int($target['message_id']??null)||$target['message_id']<1)return;
         $post=$this->mutableDraft($actor,$postId);if(!is_array($post)||$this->isNativeRepost($post))return;
         $channel=$this->channel((int)$post['channel_id']);if(!is_array($channel))return;
@@ -191,6 +208,7 @@ trait GitPostedTelegramDraftUi
             $this->telegram->sendMessage($actor,'Не удалось изменить комментарии. Для отключения нужна связанная группа обсуждений, бот с правом удаления сообщений и доступный reader. Черновик и текущий ввод сохранены.');
             return;
         }
+        $commentsDisabled=$desired===0&&(int)$post['comments_enabled']!==0;
         $target['draft_ui_expanded']=true;$this->showDraftActions($actor,$postId,'',$target);
     }
 

@@ -72,7 +72,13 @@ Telegram bot (@posted), with Telegram and MAX support, scheduled posts,
 recurring publications, independent post duplicates and account data transfer
 within the same platform.
 
-## Выпуск 0.1.3
+## Выпуск 0.1.4
+
+После успешного отключения комментариев в черновике Telegram появляется
+окно с напоминанием о правах бота в группе обсуждения, как у Posted.
+Повторное нажатие и отклонённое изменение не показывают сообщение об успехе.
+
+## Предыдущий выпуск 0.1.3
 
 Меню **«КНОПКИ: скрытое продолжение»** в редакторе черновика Telegram
 получило текст, эмодзи и выделение заголовка по образцу Posted.

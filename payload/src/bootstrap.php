@@ -3589,8 +3589,9 @@ final class PostedBot
         return $buttons;
     }
 
-    private function handleDraftCallback(int $userId, string $data, ?array $target = null): void
+    private function handleDraftCallback(int $userId, string $data, ?array $target = null, ?bool &$commentsDisabled = null): void
     {
+        $commentsDisabled = false;
         $parts = explode(':', $data);
         $target = $this->telegramDraftEditorCallbackTarget($parts, $target);
         $action = (string) ($parts[1] ?? '');
@@ -3796,7 +3797,7 @@ final class PostedBot
             return;
         }
         if ($action === 'comments') {
-            $this->setTelegramDraftComments($userId, $postId, $desiredFlag, $target);
+            $this->setTelegramDraftComments($userId, $postId, $desiredFlag, $target, $commentsDisabled);
             return;
         }
         if ($action === 'reply') {
