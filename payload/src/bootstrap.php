@@ -3944,8 +3944,8 @@ final class PostedBot
                 $userId,
                 'await_hidden_label',
                 ['post_id'=>$postId],
-                "Отправьте боту название кнопки.\n\nВаши подписчики увидят скрытый текст, нажав на кнопку.\n\nЧтобы установить цвет кнопке, добавьте «!r», «!g» или «!b» перед названием.",
-                ['reply_markup'=>['inline_keyboard'=>[[['text'=>'← Назад','callback_data'=>'draft:hidden:'.$postId]]]]],
+                "Отправьте боту название кнопки.\n\nВаши подписчики увидят скрытый пост, нажав на кнопку.\n\nЧтобы установить цвет кнопке, добавьте «!r», «!g» или «!b» перед кнопкой:\n\n!r Эта кнопка будет красной",
+                ['entities'=>[['type'=>'code','offset'=>128,'length'=>2],['type'=>'code','offset'=>134,'length'=>2],['type'=>'code','offset'=>143,'length'=>2],['type'=>'blockquote','offset'=>163,'length'=>27],['type'=>'bold','offset'=>163,'length'=>27]],'reply_markup'=>['inline_keyboard'=>[[['text'=>'← Назад','callback_data'=>'draft:hidden:'.$postId]]]]],
                 $target
             );
             return;
