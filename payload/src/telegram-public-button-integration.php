@@ -60,11 +60,8 @@ trait GitPostedTelegramPublicButtonIntegration
             if($button===null)throw new RuntimeException('public_button_stale_callback');$kind=$parts[1];$key=$parts[3];
             if($kind==='hidden'){
                 if(!is_string($button['hidden_text']??null)||!mb_check_encoding($button['hidden_text'],'UTF-8'))throw new RuntimeException('public_button_hidden_payload');
-                $hidden=$button['hidden_text'];$chat=$receipt['chat_id'];$this->pdo->commit();
-                try{$r=$this->telegram->call('getChatMember',['chat_id'=>$chat,'user_id'=>$actor]);$status=$r['result']['status']??null;if(($r['ok']??null)!==true||!in_array($status,['member','administrator','creator'],true)){$this->answerCallback($callback,'Сначала подпишитесь на канал.');return true;}}
-                catch(Throwable){$this->answerCallback($callback,'Не удалось проверить подписку.');return true;}
-                $text=mb_strlen($hidden,'UTF-8')>self::HIDDEN_TEXT_LIMIT?mb_substr($hidden,0,self::HIDDEN_TEXT_LIMIT-1,'UTF-8').'…':$hidden;
-                $this->telegram->call('answerCallbackQuery',['callback_query_id'=>(string)($callback['id']??''),'text'=>$text,'show_alert'=>true]);return true;
+                $chat=$receipt['chat_id'];$this->pdo->commit();
+                $this->answerTelegramHiddenButton($callback,$button,$chat);return true;
             }
             if(($button['reaction_key']??null)!==$key)throw new RuntimeException('public_button_reaction_binding');
             $callbackId=$callback['id']??null;if(!is_string($callbackId)||$callbackId===''||strlen($callbackId)>256||preg_match('/[\x00-\x20\x7f]/',$callbackId)===1)throw new RuntimeException('public_button_callback_identity');$q=$this->pdo->prepare('SELECT reaction_key,last_callback_id FROM posted_reactions WHERE post_id=? AND user_id=? LIMIT 1 FOR UPDATE');$q->execute([$postId,$actor]);$old=$q->fetch();$current=is_array($old)?(string)$old['reaction_key']:'';

@@ -1618,6 +1618,7 @@ final class PostedBot
         if($this->handleTelegramDraftPanelCallback($callback))return;
         if($this->handleTelegramPublishedAlbumCallback($callback))return;
         if($this->handleTelegramPublishedSingleCallback($callback))return;
+        if($this->handleTelegramDraftHiddenInputCallback($callback))return;
         if ((string) ($user['state'] ?? '') === 'collecting_media_group') {
             $this->clearState($userId);
         }
@@ -2321,6 +2322,7 @@ final class PostedBot
             'await_reactions',
             'await_hidden_label',
             'await_hidden_text',
+            'await_hidden_nonmember',
             'await_replace_links',
             'await_buttons',
             'await_schedule',
@@ -2330,12 +2332,20 @@ final class PostedBot
             $postId=(int)($data['post_id']??0);
             $post=$this->mutableDraft($userId,$postId,$state==='await_schedule');
             if(!$post){
-                $this->clearState($userId);
+                if (in_array($state, ['await_hidden_label','await_hidden_text','await_hidden_nonmember'], true)) {
+                    $this->clearTelegramRepostInputIfCurrent($userId, $state, $data);
+                } else {
+                    $this->clearState($userId);
+                }
                 $this->telegram->sendMessage($userId,'Черновик уже недоступен или у вас больше нет нужных прав.');
                 return;
             }
             if ($this->isNativeRepost($post) && $this->isTelegramRepostCopyInput($state)) {
-                $this->clearState($userId);
+                if (in_array($state, ['await_hidden_label','await_hidden_text','await_hidden_nonmember'], true)) {
+                    $this->clearTelegramRepostInputIfCurrent($userId, $state, $data);
+                } else {
+                    $this->clearState($userId);
+                }
                 $this->showDraftActions($userId, $postId, 'Выбран режим репоста. Чтобы изменить содержимое, сначала выберите «Сделать копией».');
                 return;
             }
@@ -2430,6 +2440,7 @@ final class PostedBot
             return;
         }
         if ($state === 'await_hidden_label') {
+            if (!$this->telegramHiddenInputMatches($userId, $state, $data)) return;
             $postId = (int) ($data['post_id'] ?? 0);
             $label = trim($text);
             $style='';
@@ -2450,7 +2461,11 @@ final class PostedBot
             );
             $nextData=['post_id'=>$postId,'hidden_label'=>$label,'hidden_style'=>$style];
             if($menuId>0)$nextData['menu_message_id']=$menuId;
-            $this->setState($userId,'await_hidden_text',$nextData);
+            if ($menuId <= 0) return;
+            $this->pdo->prepare('UPDATE posted_users SET state=:next_state,state_data=:next_data
+                WHERE telegram_id=:user AND state=:state AND state_data=CAST(:data AS JSON)')
+                ->execute(['next_state'=>'await_hidden_text','next_data'=>$this->encodeJson($nextData),
+                    'user'=>$userId,'state'=>$state,'data'=>$this->encodeJson($data)]);
             return;
         }
         if ($state === 'await_hidden_text') {
@@ -2469,55 +2484,16 @@ final class PostedBot
                 );
                 return;
             }
-            $updated = $this->withTelegramManagedPostLock(
-                $userId,
-                $postId,
-                ['draft'],
-                function (array $post) use ($postId, $label, $hidden, $style, $userId, $state, $data): bool|string {
-                    if(!$this->telegramPostInlineButtonsAllowed($post))return 'album';
-                    if ($this->isNativeRepost($post)) {
-                        $this->clearTelegramRepostInputIfCurrent($userId, $state, $data);
-                        return 'native';
-                    }
-                    $buttons = $this->decodeJson((string) ($post['buttons_json'] ?? '[]'));
-                    $hiddenIndex = 0;
-                    foreach ($buttons as $row) {
-                        foreach ((array) $row as $button) {
-                            if (
-                                is_array($button)
-                                && preg_match(
-                                    '/^hidden:' . $postId . ':h(\d+)$/',
-                                    (string) ($button['callback_data'] ?? ''),
-                                    $match
-                                )
-                            ) {
-                                $hiddenIndex = max($hiddenIndex, (int) $match[1] + 1);
-                            }
-                        }
-                    }
-                    $button=[
-                        'text' => $label,
-                        'callback_data' => 'hidden:' . $postId . ':h' . $hiddenIndex,
-                        'hidden_text' => $hidden,
-                    ];
-                    if(in_array($style,['danger','success','primary'],true))$button['style']=$style;
-                    $buttons[] = [$button];
-                    $buttons=PostedTelegramButtonUi::orderRows($buttons);
-                    $this->pdo->prepare(
-                        "UPDATE posted_posts SET buttons_json=:buttons
-                         WHERE id=:id AND status='draft'"
-                    )->execute(['buttons'=>$this->encodeJson($buttons),'id'=>$postId]);
-                    return true;
-                }
-            );
-            if($updated==='album'){$this->telegram->sendMessage($userId,'Кнопки недоступны для альбомов.');return;}
-            if ($updated !== true) {
-                if ($updated !== 'native') $this->clearState($userId);
-                $this->telegram->sendMessage($userId, 'Черновик уже недоступен.');
+            $this->beginTelegramDraftHiddenNonmemberInput($userId, $state, $data, $hidden);
+            return;
+        }
+        if ($state === 'await_hidden_nonmember') {
+            $nonmember = trim($text);
+            if ($nonmember === '' || mb_strlen($nonmember) > self::HIDDEN_TEXT_LIMIT) {
+                $this->telegram->sendMessage($userId, 'Отправьте непустой текст не длиннее '.self::HIDDEN_TEXT_LIMIT.' символов или нажмите «Пропустить →».');
                 return;
             }
-            $this->clearState($userId);
-            $this->showDraftActions($userId, $postId, '', $this->draftStateMenuTarget($userId,$data));
+            $this->saveTelegramDraftHiddenButton($userId, $state, $data, $nonmember);
             return;
         }
         if ($state === 'await_replace_links') {
@@ -3625,6 +3601,10 @@ final class PostedBot
                 $target['preserve_message']=true;
             }
         }
+        if (in_array($action, ['hidden_skip','hidden_cancel'], true)) {
+            $this->handleTelegramDraftHiddenInputAction($userId, $postId, $action, $target, (string) ($parts[3] ?? ''));
+            return;
+        }
         if($this->telegramAlbumButtonAction($action)&&!$this->telegramPostInlineButtonsAllowed($post)){
             $this->telegram->sendMessage($userId,'Кнопки недоступны для альбомов.');return;
         }
@@ -3929,14 +3909,7 @@ final class PostedBot
             return;
         }
         if ($action === 'hidden') {
-            $keyboard = $this->buttonTypeKeyboard($postId, 'hidden');
-            $back = array_pop($keyboard);
-            $keyboard[] = [['text' => '➕', 'callback_data' => 'draft:hidden_add:' . $postId]];
-            $keyboard[] = $back;
-            $this->sendOrEditMessage($userId, "👁 КНОПКИ: скрытое продолжение\n\nВ этом разделе вы можете добавить кнопки, под которые вы можете скрыть пост от тех, кто не подписан на ваш канал.", [
-                'entities' => [['type'=>'custom_emoji','offset'=>0,'length'=>2,'custom_emoji_id'=>'5465338857593521309'],['type'=>'bold','offset'=>3,'length'=>27]],
-                'reply_markup' => ['inline_keyboard' => $keyboard],
-            ], $target);
+            $this->showTelegramDraftHiddenMenu($userId, $postId, $target);
             return;
         }
         if ($action === 'hidden_add') {
@@ -7486,7 +7459,7 @@ final class PostedBot
 
     private function handleTelegramAlbumButtonInput(int $actor,string $state,array $data): bool
     {
-        if(!in_array($state,['await_buttons','await_reactions','await_hidden_label','await_hidden_text','await_edit_buttons'],true))return false;
+        if(!in_array($state,['await_buttons','await_reactions','await_hidden_label','await_hidden_text','await_hidden_nonmember','await_edit_buttons'],true))return false;
         $post=$this->post((int)($data['post_id']??0));
         if(!is_array($post)||!$this->canManagePost($actor,(int)$post['id'])||$this->telegramPostInlineButtonsAllowed($post))return false;
         $extra=$state==='await_edit_buttons'?[]:[
@@ -13604,6 +13577,192 @@ final class PostedBot
             . "!r Красный - https://t.me | !g Зелёный - https://t.me";
     }
 
+    private function telegramHiddenInputMatches(int $userId, string $state, array $data): bool
+    {
+        $user = $this->user($userId);
+        if (!is_array($user) || ($user['state'] ?? null) !== $state) return false;
+        $current = $this->stateData($user);
+        ksort($current);
+        ksort($data);
+        return $current === $data;
+    }
+
+    private function beginTelegramDraftHiddenNonmemberInput(int $userId, string $state, array $data, string $hidden): void
+    {
+        if (!$this->telegramHiddenInputMatches($userId, $state, $data)) return;
+        $postId = (int) ($data['post_id'] ?? 0);
+        $nonce = bin2hex(random_bytes(12));
+        $target = $this->draftStateMenuTarget($userId, $data);
+        if ($target !== null) $target['preserve_message'] = true;
+        $menuId = $this->sendOrEditMessage(
+            $userId,
+            'Отправьте боту текст, который по нажатию на кнопку увидят люди, не подписанные на ваш канал.',
+            ['reply_markup'=>['inline_keyboard'=>[[
+                ['text'=>'← Назад','callback_data'=>'draft:hidden_cancel:'.$postId.':'.$nonce],
+                ['text'=>'Пропустить →','callback_data'=>'draft:hidden_skip:'.$postId.':'.$nonce],
+            ]]]],
+            $target
+        );
+        if ($menuId <= 0) return;
+        $next = [
+            'post_id'=>$postId,
+            'hidden_label'=>(string) ($data['hidden_label'] ?? ''),
+            'hidden_style'=>(string) ($data['hidden_style'] ?? ''),
+            'hidden_text'=>$hidden,
+            'hidden_nonce'=>$nonce,
+            'menu_message_id'=>$menuId,
+        ];
+        // A newer input may have arrived while Telegram returned the new menu.
+        $this->pdo->prepare('UPDATE posted_users SET state=:next_state,state_data=:next_data
+            WHERE telegram_id=:user AND state=:state AND state_data=CAST(:data AS JSON)')
+            ->execute(['next_state'=>'await_hidden_nonmember','next_data'=>$this->encodeJson($next),
+                'user'=>$userId,'state'=>$state,'data'=>$this->encodeJson($data)]);
+    }
+
+    private function saveTelegramDraftHiddenButton(int $userId, string $state, array $data, ?string $nonmember = null): bool
+    {
+        $postId = (int) ($data['post_id'] ?? 0);
+        $label = trim((string) ($data['hidden_label'] ?? ''));
+        $hidden = trim((string) ($data['hidden_text'] ?? ''));
+        $style = (string) ($data['hidden_style'] ?? '');
+        if ($state !== 'await_hidden_nonmember' || $postId <= 0 || $label === '' || $hidden === ''
+            || mb_strlen($hidden) > self::HIDDEN_TEXT_LIMIT
+            || ($nonmember !== null && (trim($nonmember) === '' || mb_strlen($nonmember) > self::HIDDEN_TEXT_LIMIT))) return false;
+        $updated = $this->withTelegramManagedPostLock(
+            $userId, $postId, ['draft'],
+            function (array $post) use ($postId, $label, $hidden, $style, $nonmember, $userId, $state, $data): bool|string {
+                if (!$this->telegramHiddenInputMatches($userId, $state, $data)) return 'stale';
+                if (!$this->telegramPostInlineButtonsAllowed($post)) return 'album';
+                if ($this->isNativeRepost($post)) {
+                    $this->clearTelegramRepostInputIfCurrent($userId, $state, $data);
+                    return 'native';
+                }
+                $buttons = $this->decodeJson((string) ($post['buttons_json'] ?? '[]'));
+                $hiddenIndex = 0;
+                foreach ($buttons as $row) {
+                    foreach ((array) $row as $button) {
+                        if (is_array($button) && preg_match('/^hidden:' . $postId . ':h(\d+)$/',
+                            (string) ($button['callback_data'] ?? ''), $match)) {
+                            $hiddenIndex = max($hiddenIndex, (int) $match[1] + 1);
+                        }
+                    }
+                }
+                $button = ['text'=>$label,'callback_data'=>'hidden:'.$postId.':h'.$hiddenIndex,'hidden_text'=>$hidden];
+                if ($nonmember !== null) $button['hidden_nonmember_text'] = $nonmember;
+                if (in_array($style, ['danger','success','primary'], true)) $button['style'] = $style;
+                $buttons[] = [$button];
+                $buttons = PostedTelegramButtonUi::orderRows($buttons);
+                // Consume this exact input in the same transaction as its button.
+                $consume = $this->pdo->prepare('UPDATE posted_users SET state=NULL,state_data=NULL
+                    WHERE telegram_id=:user AND state=:state AND state_data=CAST(:data AS JSON)');
+                $consume->execute(['user'=>$userId,'state'=>$state,'data'=>$this->encodeJson($data)]);
+                if ($consume->rowCount() !== 1) return 'stale';
+                $this->pdo->prepare("UPDATE posted_posts SET buttons_json=:buttons WHERE id=:id AND status='draft'")
+                    ->execute(['buttons'=>$this->encodeJson($buttons),'id'=>$postId]);
+                return true;
+            }
+        );
+        if ($updated === 'stale') return false;
+        if ($updated === 'album') {
+            $this->telegram->sendMessage($userId, 'Кнопки недоступны для альбомов.');
+            return false;
+        }
+        if ($updated !== true) {
+            $this->clearTelegramRepostInputIfCurrent($userId, $state, $data);
+            $this->telegram->sendMessage($userId, 'Черновик уже недоступен.');
+            return false;
+        }
+        $target = $this->draftStateMenuTarget($userId, $data);
+        if ($target !== null) $target['preserve_message'] = true;
+        $this->showTelegramDraftHiddenMenu($userId, $postId, $target);
+        return true;
+    }
+
+    private function handleTelegramDraftHiddenInputCallback(array $callback): bool
+    {
+        $raw = $callback['data'] ?? null;
+        if (!is_string($raw) || preg_match('/\Adraft:hidden_(?:skip|cancel)(?::|\z)/D', $raw) !== 1) return false;
+        $actor = $callback['from']['id'] ?? null;
+        $message = $callback['message'] ?? null;
+        $chat = is_array($message) ? ($message['chat'] ?? null) : null;
+        if (!is_int($actor) || $actor <= 0 || !is_array($chat) || ($chat['type'] ?? null) !== 'private'
+            || ($chat['id'] ?? null) !== $actor || ($message['from']['is_bot'] ?? null) !== true
+            || preg_match('/\Adraft:hidden_(skip|cancel):([1-9][0-9]{0,18}):([a-f0-9]{24})\z/D', $raw, $parts) !== 1
+            || (string) (int) $parts[2] !== $parts[2]) return true;
+        $this->answerCallback($callback);
+        // Run the ordinary draft ACL/status checks without consuming an unrelated input first.
+        $this->handleDraftCallback($actor, $raw, $this->callbackTarget($callback));
+        return true;
+    }
+
+    private function handleTelegramDraftHiddenInputAction(int $userId, int $postId, string $action, ?array $target, string $nonce): void
+    {
+        if (!in_array($action, ['hidden_skip','hidden_cancel'], true)
+            || preg_match('/\A[a-f0-9]{24}\z/D', $nonce) !== 1) return;
+        $user = $this->user($userId);
+        $data = $this->stateData($user);
+        if (($user['state'] ?? null) !== 'await_hidden_nonmember' || (int) ($data['post_id'] ?? 0) !== $postId
+            || !is_string($data['hidden_nonce'] ?? null) || !hash_equals($data['hidden_nonce'], $nonce)
+            || $target === null || (string) ($target['chat_id'] ?? '') !== (string) $userId
+            || (int) ($data['menu_message_id'] ?? 0) <= 0
+            || (int) ($target['message_id'] ?? 0) !== (int) $data['menu_message_id']) return;
+        if ($action === 'hidden_skip') {
+            $this->saveTelegramDraftHiddenButton($userId, 'await_hidden_nonmember', $data);
+            return;
+        }
+        $clear = $this->pdo->prepare('UPDATE posted_users SET state=NULL,state_data=NULL
+            WHERE telegram_id=:user AND state=:state AND state_data=CAST(:data AS JSON)');
+        $clear->execute(['user'=>$userId,'state'=>'await_hidden_nonmember','data'=>$this->encodeJson($data)]);
+        if ($clear->rowCount() !== 1) return;
+        $target['preserve_message'] = true;
+        $this->showTelegramDraftHiddenMenu($userId, $postId, $target);
+    }
+
+    private function showTelegramDraftHiddenMenu(int $userId, int $postId, ?array $target = null): void
+    {
+        $keyboard = $this->buttonTypeKeyboard($postId, 'hidden');
+        $back = array_pop($keyboard);
+        $keyboard[] = [['text'=>'➕','callback_data'=>'draft:hidden_add:'.$postId]];
+        $keyboard[] = $back;
+        $this->sendOrEditMessage($userId, "👁 КНОПКИ: скрытое продолжение\n\nВ этом разделе вы можете добавить кнопки, под которые вы можете скрыть пост от тех, кто не подписан на ваш канал.", [
+            'entities'=>[['type'=>'custom_emoji','offset'=>0,'length'=>2,'custom_emoji_id'=>'5465338857593521309'],['type'=>'bold','offset'=>3,'length'=>27]],
+            'reply_markup'=>['inline_keyboard'=>$keyboard],
+        ], $target);
+    }
+
+    private function answerTelegramHiddenButton(array $callback, array $button, string $chatId): void
+    {
+        $hidden = $button['hidden_text'] ?? null;
+        if (!is_string($hidden) || !mb_check_encoding($hidden, 'UTF-8')) {
+            $this->answerCallback($callback, 'Кнопка уже недоступна.');
+            return;
+        }
+        try {
+            $member = $this->telegram->call('getChatMember', ['chat_id'=>$chatId,'user_id'=>(int) ($callback['from']['id'] ?? 0)]);
+        } catch (Throwable) {
+            $this->answerCallback($callback, 'Не удалось проверить подписку.');
+            return;
+        }
+        $status = $member['result']['status'] ?? null;
+        if (($member['ok'] ?? null) !== true || !in_array($status, ['member','administrator','creator','left','kicked'], true)) {
+            $this->answerCallback($callback, 'Не удалось проверить подписку.');
+            return;
+        }
+        if (in_array($status, ['left','kicked'], true)) {
+            $nonmember = $button['hidden_nonmember_text'] ?? null;
+            if (!is_string($nonmember) || trim($nonmember) === '' || !mb_check_encoding($nonmember, 'UTF-8')) {
+                $this->answerCallback($callback, 'Сначала подпишитесь на канал.');
+                return;
+            }
+            $hidden = $nonmember;
+        }
+        $text = mb_strlen($hidden, 'UTF-8') > self::HIDDEN_TEXT_LIMIT
+            ? mb_substr($hidden, 0, self::HIDDEN_TEXT_LIMIT - 1, 'UTF-8').'…' : $hidden;
+        $this->telegram->call('answerCallbackQuery', [
+            'callback_query_id'=>(string) ($callback['id'] ?? ''),'text'=>$text,'show_alert'=>true,
+        ]);
+    }
+
     private function buttonTypeKeyboard(int $postId, string $selected = 'url'): array
     {
         $url = ['text' => 'URL-кнопки', 'callback_data' => 'draft:buttons:' . $postId];
@@ -13717,29 +13876,17 @@ final class PostedBot
         }
         $buttons = $this->decodeJson((string) ($post['buttons_json'] ?? '[]'));
         if ($kind === 'hidden') {
-            $hiddenText = '';
+            $hiddenButton = null;
             foreach ($buttons as $row) {
                 foreach ((array) $row as $button) {
-                    if (is_array($button) && (string) ($button['callback_data'] ?? '') === $data) {
-                        $hiddenText = (string) ($button['hidden_text'] ?? '');
-                    }
+                    if (is_array($button) && (string) ($button['callback_data'] ?? '') === $data) $hiddenButton = $button;
                 }
             }
-            try {
-                $member = $this->telegram->call('getChatMember', ['chat_id' => (string) $post['chat_id'], 'user_id' => $userId]);
-                $status = (string) ($member['result']['status'] ?? 'left');
-                if (!in_array($status, ['member', 'administrator', 'creator'], true)) {
-                    $this->answerCallback($callback, 'Сначала подпишитесь на канал.');
-                    return;
-                }
-            } catch (Throwable) {
-                $this->answerCallback($callback, 'Не удалось проверить подписку.');
+            if ($hiddenButton === null) {
+                $this->answerCallback($callback, 'Кнопка уже недоступна.');
                 return;
             }
-            $shownHiddenText=mb_strlen($hiddenText)>self::HIDDEN_TEXT_LIMIT
-                ? mb_substr($hiddenText,0,self::HIDDEN_TEXT_LIMIT-1).'…'
-                : $hiddenText;
-            $this->telegram->call('answerCallbackQuery', ['callback_query_id' => (string) ($callback['id'] ?? ''), 'text' => $shownHiddenText, 'show_alert' => true]);
+            $this->answerTelegramHiddenButton($callback, $hiddenButton, (string) $post['chat_id']);
             return;
         }
         $callbackId=trim((string)($callback['id']??''));
