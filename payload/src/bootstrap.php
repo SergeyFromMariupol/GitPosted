@@ -3922,6 +3922,7 @@ final class PostedBot
         }
         if ($action === 'reactions') {
             $this->beginDraftInput($userId,'await_reactions',['post_id'=>$postId],"❤️ КНОПКИ: реакции\n\nОтправьте боту список реакций, разделяя их символом «/», в следующем формате:\n\n👍/👎/🤯\n\nЧтобы разместить реакции в несколько строчек, разделите их переносом строки:\n\n👍/👎\n🔥/💀\n\nЧтобы установить цвет кнопке, добавьте «!r», «!g» или «!b» перед кнопкой:\n\n!r 👍 Красный / !b 👎 Синий", [
+                'entities' => [['type'=>'custom_emoji','offset'=>0,'length'=>2,'custom_emoji_id'=>'5258179403652801593'],['type'=>'bold','offset'=>3,'length'=>15],['type'=>'blockquote','offset'=>99,'length'=>8],['type'=>'blockquote','offset'=>187,'length'=>11],['type'=>'code','offset'=>240,'length'=>2],['type'=>'code','offset'=>246,'length'=>2],['type'=>'code','offset'=>255,'length'=>2],['type'=>'blockquote','offset'=>275,'length'=>27],['type'=>'bold','offset'=>275,'length'=>27]],
                 'reply_markup' => ['inline_keyboard' => $this->buttonTypeKeyboard($postId, 'reactions')],
             ], $target);
             return;

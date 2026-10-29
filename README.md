@@ -72,7 +72,13 @@ Telegram bot (@posted), with Telegram and MAX support, scheduled posts,
 recurring publications, independent post duplicates and account data transfer
 within the same platform.
 
-## Выпуск 0.1.1
+## Выпуск 0.1.2
+
+Исправлено форматирование подсказки **«КНОПКИ: реакции»** в редакторе черновика
+Telegram. Выделения и примеры сохраняют оформление
+при отправке и обновлении меню.
+
+## Предыдущий выпуск 0.1.1
 
 Telegram-канал можно подключить по `@username`, ссылке `https://t.me/username`,
 числовому ID или пересланному сообщению. Проверяются именно канал, права бота
