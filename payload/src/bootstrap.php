@@ -2452,14 +2452,15 @@ final class PostedBot
                 $this->telegram->sendMessage($userId, 'Отправьте непустое название кнопки.');
                 return;
             }
+            $nonce=bin2hex(random_bytes(12));
             $menuTarget=$this->draftStateMenuTarget($userId,$data);
             $menuId=$this->sendOrEditMessage(
                 $userId,
                 'Отправьте боту текст, который увидят подписчики вашего канала по нажатию на кнопку.',
-                ['reply_markup'=>['inline_keyboard'=>[[['text'=>'← Назад','callback_data'=>'draft:hidden:'.$postId]]]]],
+                ['reply_markup'=>['inline_keyboard'=>[[['text'=>'← Назад','callback_data'=>'draft:hidden_cancel:'.$postId.':'.$nonce]]]]],
                 $menuTarget
             );
-            $nextData=['post_id'=>$postId,'hidden_label'=>$label,'hidden_style'=>$style];
+            $nextData=['post_id'=>$postId,'hidden_label'=>$label,'hidden_style'=>$style,'hidden_nonce'=>$nonce];
             if($menuId>0)$nextData['menu_message_id']=$menuId;
             if ($menuId <= 0) return;
             $this->pdo->prepare('UPDATE posted_users SET state=:next_state,state_data=:next_data
@@ -3909,16 +3910,18 @@ final class PostedBot
             return;
         }
         if ($action === 'hidden') {
+            if (!$this->telegramDraftHiddenBackAllowsMenu($userId, $postId, $target)) return;
             $this->showTelegramDraftHiddenMenu($userId, $postId, $target);
             return;
         }
         if ($action === 'hidden_add') {
+            $nonce=bin2hex(random_bytes(12));
             $this->beginDraftInput(
                 $userId,
                 'await_hidden_label',
-                ['post_id'=>$postId],
+                ['post_id'=>$postId,'hidden_nonce'=>$nonce],
                 "Отправьте боту название кнопки.\n\nВаши подписчики увидят скрытый пост, нажав на кнопку.\n\nЧтобы установить цвет кнопке, добавьте «!r», «!g» или «!b» перед кнопкой:\n\n!r Эта кнопка будет красной",
-                ['entities'=>[['type'=>'code','offset'=>128,'length'=>2],['type'=>'code','offset'=>134,'length'=>2],['type'=>'code','offset'=>143,'length'=>2],['type'=>'blockquote','offset'=>163,'length'=>27],['type'=>'bold','offset'=>163,'length'=>27]],'reply_markup'=>['inline_keyboard'=>[[['text'=>'← Назад','callback_data'=>'draft:hidden:'.$postId]]]]],
+                ['entities'=>[['type'=>'code','offset'=>128,'length'=>2],['type'=>'code','offset'=>134,'length'=>2],['type'=>'code','offset'=>143,'length'=>2],['type'=>'blockquote','offset'=>163,'length'=>27],['type'=>'bold','offset'=>163,'length'=>27]],'reply_markup'=>['inline_keyboard'=>[[['text'=>'← Назад','callback_data'=>'draft:hidden_cancel:'.$postId.':'.$nonce]]]]],
                 $target
             );
             return;
@@ -13681,14 +13684,16 @@ final class PostedBot
     private function handleTelegramDraftHiddenInputCallback(array $callback): bool
     {
         $raw = $callback['data'] ?? null;
-        if (!is_string($raw) || preg_match('/\Adraft:hidden_(?:skip|cancel)(?::|\z)/D', $raw) !== 1) return false;
+        if (!is_string($raw) || preg_match('/\Adraft:hidden(?::|_(?:skip|cancel)(?::|\z)|\z)/D', $raw) !== 1) return false;
         $actor = $callback['from']['id'] ?? null;
         $message = $callback['message'] ?? null;
         $chat = is_array($message) ? ($message['chat'] ?? null) : null;
+        $legacy = preg_match('/\Adraft:hidden:([1-9][0-9]{0,18})\z/D', $raw, $legacyParts) === 1;
+        $guarded = preg_match('/\Adraft:hidden_(skip|cancel):([1-9][0-9]{0,18}):([a-f0-9]{24})\z/D', $raw, $parts) === 1;
+        $postKey = $legacy ? $legacyParts[1] : ($parts[2] ?? '');
         if (!is_int($actor) || $actor <= 0 || !is_array($chat) || ($chat['type'] ?? null) !== 'private'
             || ($chat['id'] ?? null) !== $actor || ($message['from']['is_bot'] ?? null) !== true
-            || preg_match('/\Adraft:hidden_(skip|cancel):([1-9][0-9]{0,18}):([a-f0-9]{24})\z/D', $raw, $parts) !== 1
-            || (string) (int) $parts[2] !== $parts[2]) return true;
+            || (!$legacy && !$guarded) || (string) (int) $postKey !== $postKey) return true;
         $this->answerCallback($callback);
         // Run the ordinary draft ACL/status checks without consuming an unrelated input first.
         $this->handleDraftCallback($actor, $raw, $this->callbackTarget($callback));
@@ -13701,7 +13706,10 @@ final class PostedBot
             || preg_match('/\A[a-f0-9]{24}\z/D', $nonce) !== 1) return;
         $user = $this->user($userId);
         $data = $this->stateData($user);
-        if (($user['state'] ?? null) !== 'await_hidden_nonmember' || (int) ($data['post_id'] ?? 0) !== $postId
+        $state = $user['state'] ?? null;
+        $allowedStates = $action === 'hidden_skip' ? ['await_hidden_nonmember']
+            : ['await_hidden_label','await_hidden_text','await_hidden_nonmember'];
+        if (!in_array($state, $allowedStates, true) || (int) ($data['post_id'] ?? 0) !== $postId
             || !is_string($data['hidden_nonce'] ?? null) || !hash_equals($data['hidden_nonce'], $nonce)
             || $target === null || (string) ($target['chat_id'] ?? '') !== (string) $userId
             || (int) ($data['menu_message_id'] ?? 0) <= 0
@@ -13712,10 +13720,29 @@ final class PostedBot
         }
         $clear = $this->pdo->prepare('UPDATE posted_users SET state=NULL,state_data=NULL
             WHERE telegram_id=:user AND state=:state AND state_data=CAST(:data AS JSON)');
-        $clear->execute(['user'=>$userId,'state'=>'await_hidden_nonmember','data'=>$this->encodeJson($data)]);
+        $clear->execute(['user'=>$userId,'state'=>$state,'data'=>$this->encodeJson($data)]);
         if ($clear->rowCount() !== 1) return;
         $target['preserve_message'] = true;
         $this->showTelegramDraftHiddenMenu($userId, $postId, $target);
+    }
+
+    /** Older prompts have no nonce. Only their exact current input can be cancelled. */
+    private function telegramDraftHiddenBackAllowsMenu(int $userId, int $postId, ?array $target): bool
+    {
+        $user = $this->user($userId);
+        $state = $user['state'] ?? null;
+        if ($state === 'collecting_media_group') return false;
+        if (!in_array($state, ['await_hidden_label','await_hidden_text','await_hidden_nonmember'], true)) return true;
+        $data = $this->stateData($user);
+        if ($state === 'await_hidden_nonmember' || array_key_exists('hidden_nonce', $data)
+            || (int) ($data['post_id'] ?? 0) !== $postId || $target === null
+            || (string) ($target['chat_id'] ?? '') !== (string) $userId
+            || (int) ($data['menu_message_id'] ?? 0) <= 0
+            || (int) ($target['message_id'] ?? 0) !== (int) $data['menu_message_id']) return false;
+        $clear = $this->pdo->prepare('UPDATE posted_users SET state=NULL,state_data=NULL
+            WHERE telegram_id=:user AND state=:state AND state_data=CAST(:data AS JSON)');
+        $clear->execute(['user'=>$userId,'state'=>$state,'data'=>$this->encodeJson($data)]);
+        return $clear->rowCount() === 1;
     }
 
     private function showTelegramDraftHiddenMenu(int $userId, int $postId, ?array $target = null): void
