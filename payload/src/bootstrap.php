@@ -3932,7 +3932,8 @@ final class PostedBot
             $back = array_pop($keyboard);
             $keyboard[] = [['text' => '➕', 'callback_data' => 'draft:hidden_add:' . $postId]];
             $keyboard[] = $back;
-            $this->sendOrEditMessage($userId, "👁 КНОПКИ: скрытое продолжение\n\nВ этом разделе вы можете добавить кнопки, под которые вы можете скрыть текст от тех, кто не подписан на ваш канал.", [
+            $this->sendOrEditMessage($userId, "👁 КНОПКИ: скрытое продолжение\n\nВ этом разделе вы можете добавить кнопки, под которые вы можете скрыть пост от тех, кто не подписан на ваш канал.", [
+                'entities' => [['type'=>'custom_emoji','offset'=>0,'length'=>2,'custom_emoji_id'=>'5465338857593521309'],['type'=>'bold','offset'=>3,'length'=>27]],
                 'reply_markup' => ['inline_keyboard' => $keyboard],
             ], $target);
             return;

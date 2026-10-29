@@ -72,7 +72,12 @@ Telegram bot (@posted), with Telegram and MAX support, scheduled posts,
 recurring publications, independent post duplicates and account data transfer
 within the same platform.
 
-## Выпуск 0.1.2
+## Выпуск 0.1.3
+
+Меню **«КНОПКИ: скрытое продолжение»** в редакторе черновика Telegram
+получило текст, эмодзи и выделение заголовка по образцу Posted.
+
+## Предыдущий выпуск 0.1.2
 
 Исправлено форматирование подсказки **«КНОПКИ: реакции»** в редакторе черновика
 Telegram. Выделения и примеры сохраняют оформление
