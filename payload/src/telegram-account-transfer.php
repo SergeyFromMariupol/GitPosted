@@ -2,15 +2,22 @@
 
 declare(strict_types=1);
 
+require_once __DIR__.'/telegram-policy.php';
+require_once __DIR__ . '/telegram-post-options.php';
+require_once __DIR__ . '/telegram-multipost-transfer.php';
+require_once __DIR__ . '/telegram-top-transfer.php';
+
 /** Move existing Telegram records between two users of this installation. */
 final class PostedTelegramAccountTransfer
 {
     private readonly Closure $telegram;
+    private readonly ?Closure $operatorAllowed;
     private bool $locking = false;
 
-    public function __construct(private readonly PDO $pdo, callable $telegram)
+    public function __construct(private readonly PDO $pdo, callable $telegram, ?callable $operatorAllowed=null)
     {
         $this->telegram = Closure::fromCallable($telegram);
+        $this->operatorAllowed=$operatorAllowed!==null?Closure::fromCallable($operatorAllowed):null;
     }
 
     public function resolveRecipient(string $input): array
@@ -69,10 +76,13 @@ final class PostedTelegramAccountTransfer
             foreach ($before['channels'] as $channel) {
                 $this->acquire('gitposted_pin_' . substr(hash('sha256', (string) $channel['id']), 0, 32), $locks);
             }
-            $this->pdo->beginTransaction();
+            PostedTelegramRootedAccess::begin($this->pdo,PostedTelegramRootedAccess::current([]),true);
             // Compatible with publish/edit: channels, posts, actors, permissions.
             foreach ($before['channels'] as $channel) $this->rows('SELECT id FROM posted_channels WHERE id=? FOR UPDATE', [(int) $channel['id']]);
-            foreach ($before['posts'] as $post) $this->rows('SELECT id FROM posted_posts WHERE id=? FOR UPDATE', [(int) $post['id']]);
+            $postIds=[];
+            foreach ([$before['posts'],$before['target_legacy_posts'],$before['multipost']['posts']] as $posts) foreach ($posts as $post) $postIds[]=(int)$post['id'];
+            $postIds=array_values(array_unique($postIds)); sort($postIds,SORT_NUMERIC);
+            foreach ($postIds as $postId) $this->rows('SELECT id FROM posted_posts WHERE id=? FOR UPDATE', [$postId]);
             $ids = [$sourceId, $targetId]; sort($ids, SORT_NUMERIC);
             $this->rows('SELECT telegram_id FROM posted_users WHERE telegram_id IN (?,?) ORDER BY telegram_id FOR UPDATE', $ids);
             // New channel/post creation locks its actor before writing. Do not
@@ -81,6 +91,8 @@ final class PostedTelegramAccountTransfer
             // Actor rows serialize even empty owner ranges: InnoDB gap locks
             // alone are compatible and cannot serialize concurrent inserts.
             foreach ($ids as $ownerId) {
+                $this->rows('SELECT channel_id FROM posted_permissions WHERE user_id=? ORDER BY channel_id FOR UPDATE', [$ownerId]);
+                $this->rows('SELECT id FROM posted_manager_categories WHERE user_id=? ORDER BY channel_id,name FOR UPDATE', [$ownerId]);
                 $this->rows('SELECT id FROM posted_templates WHERE owner_id=? ORDER BY id FOR UPDATE', [$ownerId]);
                 $folders = $this->rows('SELECT id FROM posted_folders WHERE owner_id=? ORDER BY id FOR UPDATE', [$ownerId]);
                 foreach ($folders as $folder) $this->rows('SELECT channel_id FROM posted_folder_channels WHERE folder_id=? ORDER BY channel_id FOR UPDATE', [(int)$folder['id']]);
@@ -92,7 +104,7 @@ final class PostedTelegramAccountTransfer
             $this->locking = true;
             $source = $this->activeUser($sourceId);
             $receipt = $this->receipt($source, $targetId, $fingerprint, $nonce);
-            if ($receipt !== null) { $this->pdo->commit(); return $receipt; }
+            if ($receipt !== null) { PostedTelegramRootedAccess::commit($this->pdo); return $receipt; }
             $state = $this->confirmation($source, $targetId, $fingerprint, $nonce);
             $scope = $this->scope($sourceId, $targetId);
             $scope['target_profile'] = $before['target_profile'];
@@ -107,6 +119,11 @@ final class PostedTelegramAccountTransfer
                 throw new DomainException('Данные изменились во время проверки. Подготовьте перенос заново.');
             }
             // Only identity/UI columns change. Timeline, transport and content stay intact.
+            // A colliding legacy quota ledger becomes an independent category.
+            // Its post links are the only non-identity publication fields changed.
+            PostedTelegramTopTransfer::applyLocked($this->pdo,$scope['top_hold'],$scope['channels'],$sourceId,$targetId);
+            $legacyCategories=$this->transferPermissions($scope,$sourceId,$targetId);
+            PostedTelegramMultipostTransfer::applyLocked($this->pdo,$scope['multipost'],$sourceId,$targetId,$legacyCategories);
             foreach ($scope['posts'] as $post) {
                 $this->execute('UPDATE posted_posts SET author_id=?,telegram_preview_chat_id=NULL,telegram_preview_message_ids=NULL,telegram_preview_control_message_id=NULL,telegram_preview_fingerprint=NULL WHERE id=? AND author_id=?', [$targetId, (int)$post['id'], $sourceId]);
             }
@@ -116,25 +133,36 @@ final class PostedTelegramAccountTransfer
                 $this->execute('UPDATE posted_folders SET owner_id=?,title=? WHERE id=? AND owner_id=?', [$targetId, $title, (int) $folder['id'], $sourceId]);
             }
             foreach ($scope['categories'] as $category) {
-                if ((int) $category['user_id'] !== $sourceId || !in_array((int) $category['channel_id'], $scope['owned_ids'], true)) continue;
+                if ((int) $category['user_id'] !== $sourceId) continue;
                 $title = $this->uniqueTitle('posted_manager_categories', 'user_id', $targetId, (string) $category['name'], 100, (int) $category['channel_id']);
                 $this->execute('UPDATE posted_manager_categories SET user_id=?,name=? WHERE id=? AND user_id=?', [$targetId, $title, (int) $category['id'], $sourceId]);
             }
             foreach ($scope['owned_ids'] as $channelId) {
                 $this->execute('UPDATE posted_channels SET added_by=? WHERE id=? AND added_by=?', [$targetId, $channelId, $sourceId]);
-                $this->execute('INSERT INTO posted_permissions(user_id,channel_id,can_post,can_schedule,can_manage_posts,can_manage_admins) VALUES(?,?,1,1,1,1) ON DUPLICATE KEY UPDATE can_post=1,can_schedule=1,can_manage_posts=1,can_manage_admins=1,is_ad_manager=0,post_quota_remaining=NULL,pin_quota_remaining=NULL', [$targetId, $channelId]);
-                $this->execute('DELETE FROM posted_permissions WHERE user_id=? AND channel_id=?', [$sourceId, $channelId]);
+                $channel=null;
+                foreach($scope['channels'] as $candidate) if((int)$candidate['id']===$channelId) { $channel=$candidate; break; }
+                if(!is_array($channel)) throw new LogicException('Transferred channel is missing from scope.');
+                $hasDelegation=(!empty($channel['is_active'])&&empty($channel['admin_blocked']))
+                    || self::channelTransferMarker($channel,$scope['markers'][$channelId]??null)!==null;
+                if($hasDelegation) {
+                    $marker=['version'=>1,'channel_id'=>$channelId,'chat_id'=>(string)$channel['chat_id'],'owner_id'=>$targetId,'source_id'=>$sourceId,'token'=>$nonce,'fingerprint'=>$fingerprint,'completed_at'=>time()];
+                    $this->execute('INSERT INTO posted_app_settings(setting_key,setting_value) VALUES(?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)', ['telegram_channel_transfer_'.$channelId,self::json($marker)]);
+                } else {
+                    // Moving dormant history cannot revive authority lost when
+                    // the bot was removed or the former human owner lost access.
+                    $this->execute('DELETE FROM posted_app_settings WHERE setting_key=?',['telegram_channel_transfer_'.$channelId]);
+                }
             }
             $this->execute('DELETE FROM posted_admin_tokens WHERE user_id=?', [$sourceId]);
-            $done = ['source_id'=>$sourceId,'token'=>$nonce,'target_id'=>$targetId,'fingerprint'=>$fingerprint,'result'=>$result,'created_at'=>$state['created_at'],'completed_at'=>time()];
+            $done = ['source_id'=>$sourceId,'token'=>$nonce,'target_id'=>$targetId,'fingerprint'=>$fingerprint,'result'=>$result,'created_at'=>$state['created_at'],'completed_at'=>time(),'permission_history'=>$scope['permissions']];
             // One durable receipt per source survives navigation or a lost HTTP
             // reply. Its nonce prevents an old retry from moving newer records.
             $this->execute('INSERT INTO posted_app_settings(setting_key,setting_value) VALUES(?,?) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)', [$this->receiptKey($sourceId), self::json($done)]);
             $this->execute("UPDATE posted_users SET state='account_transfer_done',state_data=? WHERE telegram_id=?", [self::json($done), $sourceId]);
-            $this->pdo->commit();
+            PostedTelegramRootedAccess::commit($this->pdo);
             return $result;
         } catch (Throwable $error) {
-            if ($this->pdo->inTransaction()) $this->pdo->rollBack();
+            if ($this->pdo->inTransaction()) PostedTelegramRootedAccess::rollback($this->pdo);
             throw $error;
         } finally {
             $this->locking = false;
@@ -154,28 +182,45 @@ final class PostedTelegramAccountTransfer
         $posts = $this->rows('SELECT * FROM posted_posts WHERE author_id=? ORDER BY id', [$sourceId]);
         $templates = $this->rows('SELECT * FROM posted_templates WHERE owner_id=? ORDER BY id', [$sourceId]);
         $folders = $this->rows('SELECT * FROM posted_folders WHERE owner_id=? ORDER BY id', [$sourceId]);
+        $sourcePermissions = $this->rows('SELECT * FROM posted_permissions WHERE user_id=? ORDER BY channel_id', [$sourceId]);
+        $sourceCategories = $this->rows('SELECT * FROM posted_manager_categories WHERE user_id=? ORDER BY channel_id,id', [$sourceId]);
         $links = $this->rows('SELECT link.* FROM posted_folder_channels link INNER JOIN posted_folders folder ON folder.id=link.folder_id WHERE folder.owner_id=? ORDER BY link.folder_id,link.channel_id', [$sourceId]);
+        $multipost=PostedTelegramMultipostTransfer::scope($this->pdo,$sourceId,$targetId);
         $channelIds = array_map(static fn(array $r):int=>(int)$r['id'], $owned);
-        foreach ([$posts, $templates, $links] as $records) foreach ($records as $record) if ((int)($record['channel_id']??0)>0) $channelIds[]=(int)$record['channel_id'];
+        $channelIds=[...$channelIds,...$multipost['channel_ids'],...PostedTelegramTopTransfer::channelIds($this->pdo,$sourceId)];
+        foreach ([$posts, $templates, $links, $sourcePermissions, $sourceCategories] as $records) foreach ($records as $record) if ((int)($record['channel_id']??0)>0) $channelIds[]=(int)$record['channel_id'];
         $channelIds = array_values(array_unique($channelIds)); sort($channelIds,SORT_NUMERIC);
         if (count($channelIds)>100) throw new DomainException('За один перенос поддерживается до 100 каналов. Обратитесь к администратору сервиса для переноса большого аккаунта.');
-        $channels=[]; $permissions=[]; $categories=[]; $attempts=[]; $busy=[]; $edits=[];
+        $channels=[]; $permissions=[]; $categories=[]; $attempts=[]; $busy=[]; $edits=[]; $targetLegacyPosts=[]; $markers=[];
         foreach ($channelIds as $id) {
             $channel=$this->rows('SELECT * FROM posted_channels WHERE id=?',[$id]);
             if(count($channel)!==1) throw new DomainException('Один из каналов больше не существует. Перенос остановлен.');
             $channels[]=$channel[0];
-            $permissions=[...$permissions,...$this->rows('SELECT * FROM posted_permissions WHERE channel_id=? AND user_id IN (?,?) ORDER BY user_id',[$id,$sourceId,$targetId])];
+            $channelPermissions=$this->rows('SELECT * FROM posted_permissions WHERE channel_id=? AND user_id IN (?,?) ORDER BY user_id',[$id,$sourceId,$targetId]);
+            $permissions=[...$permissions,...$channelPermissions];
+            if(count($channelPermissions)===2 && array_filter($channelPermissions,static fn(array $row):bool=>!empty($row['is_ad_manager']))!==[]) {
+                $targetLegacyPosts=[...$targetLegacyPosts,...$this->rows('SELECT * FROM posted_posts WHERE channel_id=? AND author_id=? AND manager_category_id IS NULL ORDER BY id',[$id,$targetId])];
+            }
             $categories=[...$categories,...$this->rows('SELECT * FROM posted_manager_categories WHERE channel_id=? AND user_id IN (?,?) ORDER BY id',[$id,$sourceId,$targetId])];
             $attempts=[...$attempts,...$this->rows('SELECT attempt.*,post.pin_after_publish AS transfer_pin_requested FROM posted_telegram_publish_attempts attempt INNER JOIN posted_posts post ON post.id=attempt.post_id WHERE attempt.channel_id=? ORDER BY attempt.post_id',[$id])];
             $busy=[...$busy,...$this->rows("SELECT id FROM posted_posts WHERE channel_id=? AND status IN ('publishing','telegram_pending') ORDER BY id",[$id])];
             $edits=[...$edits,...$this->rows('SELECT edit.user_id,edit.post_id FROM posted_edit_sessions edit INNER JOIN posted_posts post ON post.id=edit.post_id WHERE post.channel_id=? ORDER BY edit.post_id,edit.user_id',[$id])];
+            if((int)($channel[0]['added_by']??0)===$sourceId) {
+                $marker=$this->rows('SELECT setting_value FROM posted_app_settings WHERE setting_key=?',['telegram_channel_transfer_'.$id]);
+                $markers[$id]=$marker[0]['setting_value']??null;
+            }
         }
-        return ['source'=>$source,'target'=>$target,'owned_ids'=>array_map(static fn(array $r):int=>(int)$r['id'],$owned),'channels'=>$channels,'posts'=>$posts,'templates'=>$templates,'folders'=>$folders,'links'=>$links,'permissions'=>$permissions,'categories'=>$categories,'attempts'=>$attempts,'busy'=>$busy,'edits'=>$edits];
+        $deliveryOptions=PostedTelegramPostOptions::scopeSnapshot($this->pdo,[...$posts,...$targetLegacyPosts],$templates);
+        $topHold=PostedTelegramTopTransfer::scope($this->pdo,$sourceId,$targetId,$channels,[...$posts,...$targetLegacyPosts,...$multipost['posts']],$templates);
+        return ['source'=>$source,'target'=>$target,'owned_ids'=>array_map(static fn(array $r):int=>(int)$r['id'],$owned),'channels'=>$channels,'posts'=>$posts,'templates'=>$templates,'folders'=>$folders,'links'=>$links,'permissions'=>$permissions,'categories'=>$categories,'source_permissions'=>$sourcePermissions,'source_categories'=>$sourceCategories,'target_legacy_posts'=>$targetLegacyPosts,'delivery_options'=>$deliveryOptions,'multipost'=>$multipost,'top_hold'=>$topHold,'markers'=>$markers,'attempts'=>$attempts,'busy'=>$busy,'edits'=>$edits];
     }
 
     private function validate(array &$scope, int $sourceId, int $targetId, bool $checkTelegram = true): void
     {
-        if ($scope['owned_ids']===[] && $scope['posts']===[] && $scope['templates']===[] && $scope['folders']===[]) {
+        $this->assertOperatorAllowed($sourceId);$this->assertOperatorAllowed($targetId);
+        $rootedProof=PostedTelegramRootedAccess::transferProof($this->pdo,PostedTelegramRootedAccess::current([]),$sourceId,$targetId);
+        if($rootedProof!==null)$scope['rooted_access']=$rootedProof;
+        if ($scope['owned_ids']===[] && $scope['posts']===[] && $scope['templates']===[] && $scope['folders']===[] && $scope['source_permissions']===[] && $scope['source_categories']===[] && $scope['top_hold']['source_stock_channels']===[]) {
             throw new DomainException('У этого аккаунта нет данных для переноса.');
         }
         if ($scope['busy']!==[] || $scope['edits']!==[]) throw new DomainException('В одном из каналов выполняется отправка или редактирование. Завершите действие и повторите перенос.');
@@ -188,32 +233,129 @@ final class PostedTelegramAccountTransfer
         }
         if ($checkTelegram) $scope['target_profile']=$this->profile($scope['target']);
         foreach ($scope['channels'] as $channel) {
-            $id=(int)$channel['id']; $owner=(int)($channel['added_by']??0);
-            if (empty($channel['is_active']) || $owner<=0 || !empty($channel['admin_blocked'])) throw new DomainException('Один из каналов отключён или заблокирован. Сначала восстановите его доступ.');
-            if (in_array($id,$scope['owned_ids'],true)) {
-                if ($checkTelegram) {
-                    $this->assertAdmin((string)$channel['chat_id'],$sourceId);
-                    $this->assertAdmin((string)$channel['chat_id'],$targetId);
-                }
-                foreach ($scope['permissions'] as $permission) {
-                    if ((int)$permission['channel_id']===$id && !empty($permission['is_ad_manager'])) {
-                        throw new DomainException('В передаваемом канале один из аккаунтов имеет роль рекламного менеджера. Сначала согласуйте с владельцем перенос квот и роли.');
-                    }
-                }
-            } else {
-                $grants=[];
-                foreach($scope['permissions'] as $permission) if((int)$permission['channel_id']===$id) $grants[(int)$permission['user_id']]=$permission;
-                foreach ([$sourceId,$targetId] as $actor) {
-                    if(empty($grants[$actor]['can_post'])||empty($grants[$actor]['can_schedule'])||!empty($grants[$actor]['is_ad_manager'])) {
-                        throw new DomainException('Есть данные в чужом канале. Его владелец должен заранее выдать новому аккаунту права публикации и планирования; рекламные квоты автоматически не передаются.');
-                    }
-                }
+            $id=(int)$channel['id'];
+            // Dormant associations and history move without being reactivated.
+            if(!$checkTelegram || !in_array($id,$scope['owned_ids'],true) || empty($channel['is_active']) || !empty($channel['admin_blocked'])) continue;
+            if(self::channelTransferMarker($channel,$scope['markers'][$id]??null)===null) {
+                $this->assertAdmin((string)$channel['chat_id'],$sourceId);
             }
+            $this->assertBotCanPost((string)$channel['chat_id']);
         }
-        foreach($scope['posts'] as $post) {
-            if(!empty($post['manager_category_id'])||!empty($post['manager_post_quota_charged'])||!empty($post['manager_pin_quota_charged'])) {
-                throw new DomainException('Есть публикации с рекламными категориями или списанными квотами. Для них требуется перенос, согласованный с владельцем канала.');
+    }
+
+    private function transferPermissions(array $scope,int $sourceId,int $targetId):array
+    {
+        $legacyCategories=[];
+        $grants=[];
+        foreach($scope['permissions'] as $permission) $grants[(int)$permission['channel_id']][(int)$permission['user_id']]=$permission;
+        $capabilities=['can_post','can_schedule','can_manage_posts','can_manage_admins'];
+        foreach($scope['channels'] as $channel) {
+            $channelId=(int)$channel['id'];
+            $source=$grants[$channelId][$sourceId]??null;
+            $target=$grants[$channelId][$targetId]??null;
+            $sourceOwner=in_array($channelId,$scope['owned_ids'],true);
+            $targetOwner=(int)($channel['added_by']??0)===$targetId;
+            if(!is_array($source) && !$sourceOwner) continue;
+
+            // With no collision, changing the existing key preserves every
+            // permission field, including read-only roles and exact balances.
+            if(is_array($source) && !is_array($target)) {
+                if($this->execute('UPDATE posted_permissions SET user_id=?,updated_at=updated_at WHERE user_id=? AND channel_id=?',[$targetId,$sourceId,$channelId])!==1) {
+                    throw new DomainException('Права изменились во время переноса. Подготовьте перенос заново.');
+                }
+                if($sourceOwner || $targetOwner) {
+                    $this->execute('UPDATE posted_permissions SET can_post=1,can_schedule=1,can_manage_posts=1,can_manage_admins=1,updated_at=updated_at WHERE user_id=? AND channel_id=?',[$targetId,$channelId]);
+                }
+                continue;
             }
+
+            $source ??= ['can_post'=>1,'can_schedule'=>1,'can_manage_posts'=>1,'can_manage_admins'=>1,'is_ad_manager'=>0,'manager_description'=>null,'post_quota_remaining'=>null,'pin_quota_remaining'=>null];
+            $target ??= ['can_post'=>0,'can_schedule'=>0,'can_manage_posts'=>0,'can_manage_admins'=>0,'is_ad_manager'=>0,'manager_description'=>null,'post_quota_remaining'=>null,'pin_quota_remaining'=>null];
+            $merged=[];
+            foreach($capabilities as $capability) $merged[$capability]=($sourceOwner||$targetOwner||!empty($source[$capability])||!empty($target[$capability]))?1:0;
+            $sourceManager=!empty($source['is_ad_manager']);
+            $targetManager=!empty($target['is_ad_manager']);
+            $manager=$sourceManager||$targetManager;
+            $hasCategories=false;
+            foreach($scope['categories'] as $category) if((int)$category['channel_id']===$channelId && !empty($category['is_active'])) { $hasCategories=true; break; }
+            $overflow=false;
+            foreach(['post_quota_remaining','pin_quota_remaining'] as $column) {
+                if($source[$column]!==null && $target[$column]!==null && (int)$source[$column]+(int)$target[$column]>4294967295) $overflow=true;
+            }
+            $normalize=$manager && ($sourceManager!==$targetManager || $hasCategories || $overflow);
+            if($normalize) {
+                foreach([[$sourceId,$source,$sourceManager],[$targetId,$target,$targetManager]] as [$actorId,$permission,$isManager]) {
+                    $canPublish=!empty($permission['can_post'])||!empty($permission['can_schedule']);
+                    $postQuota=$isManager?$permission['post_quota_remaining']:($canPublish?null:0);
+                    $pinQuota=$isManager?$permission['pin_quota_remaining']:($canPublish?null:0);
+                    $title=$this->uniqueTitle('posted_manager_categories','user_id',$targetId,'Перенос '.$actorId.' — остаток',100,$channelId);
+                    $this->execute('INSERT INTO posted_manager_categories(user_id,channel_id,name,post_quota_remaining,pin_quota_remaining,is_active) VALUES(?,?,?,?,?,1)',[$targetId,$channelId,$title,$postQuota,$pinQuota]);
+                    $categoryId=(int)$this->pdo->lastInsertId();
+                    $legacyCategories[$actorId][$channelId]=$categoryId;
+                    if($categoryId<=0) throw new RuntimeException('Quota category was not created.');
+                    $posts=$actorId===$sourceId?$scope['posts']:$scope['target_legacy_posts'];
+                    foreach($posts as $post) {
+                        if((int)$post['channel_id']!==$channelId || $post['manager_category_id']!==null) continue;
+                        if($this->execute('UPDATE posted_posts SET manager_category_id=? WHERE id=? AND author_id=? AND channel_id=? AND manager_category_id IS NULL',[$categoryId,(int)$post['id'],$actorId,$channelId])!==1) {
+                            throw new DomainException('Публикация изменилась во время переноса. Подготовьте перенос заново.');
+                        }
+                    }
+                }
+                // Balances now live in distinct categories; keeping a second
+                // copy in the legacy row would mint credits on category removal.
+                $postQuota=0; $pinQuota=0;
+            } elseif($manager) {
+                $postQuota=$this->mergedQuota($source['post_quota_remaining'],$target['post_quota_remaining']);
+                $pinQuota=$this->mergedQuota($source['pin_quota_remaining'],$target['pin_quota_remaining']);
+            } else {
+                $postQuota=$target['post_quota_remaining']; $pinQuota=$target['pin_quota_remaining'];
+            }
+            $description=trim((string)($target['manager_description']??''))!==''?$target['manager_description']:($source['manager_description']??null);
+            $parameters=[$merged['can_post'],$merged['can_schedule'],$merged['can_manage_posts'],$merged['can_manage_admins'],$manager?1:0,$description,$postQuota,$pinQuota,$targetId,$channelId];
+            if(isset($grants[$channelId][$targetId])) {
+                $this->execute('UPDATE posted_permissions SET can_post=?,can_schedule=?,can_manage_posts=?,can_manage_admins=?,is_ad_manager=?,manager_description=?,post_quota_remaining=?,pin_quota_remaining=?,updated_at=updated_at WHERE user_id=? AND channel_id=?',$parameters);
+            } else {
+                $this->execute('INSERT INTO posted_permissions(can_post,can_schedule,can_manage_posts,can_manage_admins,is_ad_manager,manager_description,post_quota_remaining,pin_quota_remaining,user_id,channel_id) VALUES(?,?,?,?,?,?,?,?,?,?)',$parameters);
+            }
+            $this->execute('DELETE FROM posted_permissions WHERE user_id=? AND channel_id=?',[$sourceId,$channelId]);
+        }
+        return $legacyCategories;
+    }
+
+    private function mergedQuota(mixed $source,mixed $target):?int
+    {
+        return $source===null||$target===null?null:(int)$source+(int)$target;
+    }
+
+    /** Validate an explicit application-owner transfer, shared with runtime tenure checks. */
+    public static function channelTransferMarker(array $channel,mixed $value):?array
+    {
+        if(!is_string($value)) return null;
+        $marker=json_decode($value,true);
+        if(!is_array($marker) || ($marker['version']??null)!==1
+            || !is_int($marker['channel_id']??null) || $marker['channel_id']!==(int)($channel['id']??0) || $marker['channel_id']<=0
+            || !is_string($marker['chat_id']??null) || $marker['chat_id']==='' || $marker['chat_id']!==(string)($channel['chat_id']??'')
+            || !is_int($marker['owner_id']??null) || $marker['owner_id']<=0 || $marker['owner_id']!==(int)($channel['added_by']??0)
+            || !is_int($marker['source_id']??null) || $marker['source_id']<=0 || $marker['source_id']===$marker['owner_id']
+            || !is_string($marker['token']??null) || preg_match('/^[a-f0-9]{24}$/D',$marker['token'])!==1
+            || !is_string($marker['fingerprint']??null) || preg_match('/^[a-f0-9]{64}$/D',$marker['fingerprint'])!==1
+            || !is_int($marker['completed_at']??null) || $marker['completed_at']<=0 || $marker['completed_at']>time()+30) return null;
+        return $marker;
+    }
+
+    private function assertBotCanPost(string $chatId):void
+    {
+        try {
+            $me=($this->telegram)('getMe',[]);
+            $bot=$me['result']??null;
+            if(empty($me['ok'])||!is_array($bot)||($bot['is_bot']??null)!==true||!is_int($bot['id']??null)||$bot['id']<=0) throw new RuntimeException('Bot identity was not confirmed.');
+            $response=($this->telegram)('getChatMember',['chat_id'=>$chatId,'user_id'=>$bot['id']]);
+            $member=$response['result']??null;
+            if(empty($response['ok'])||!is_array($member)||($member['user']['is_bot']??null)!==true||($member['user']['id']??null)!==$bot['id']
+                || ($member['status']??null)!=='administrator'
+                || ($member['can_post_messages']??null)!==true) throw new RuntimeException('Bot publishing rights were not confirmed.');
+        } catch(Throwable $error) {
+            throw new DomainException('Telegram не подтвердил право бота публиковать в передаваемом канале. Перенос ничего не изменил.',0,$error);
         }
     }
 
@@ -224,7 +366,7 @@ final class PostedTelegramAccountTransfer
         foreach(['source','target'] as $key) $document[$key]=['telegram_id'=>(int)$scope[$key]['telegram_id'],'is_active'=>(int)$scope[$key]['is_active']];
         // Reconciliation timestamps are bookkeeping, not a content change.
         foreach($document['channels'] as &$row) unset($row['updated_at']); unset($row);
-        return ['source_id'=>$sourceId,'target_id'=>$targetId,'recipient'=>$scope['target_profile'],'channels'=>count($scope['owned_ids']),'posts'=>count($scope['posts']),'scheduled'=>count(array_filter($scope['posts'],static fn(array $p):bool=>$p['status']==='scheduled')),'templates'=>count($scope['templates']),'folders'=>count($scope['folders']),'fingerprint'=>hash('sha256',self::json($document))];
+        return ['source_id'=>$sourceId,'target_id'=>$targetId,'recipient'=>$scope['target_profile'],'channels'=>count($scope['owned_ids']),'posts'=>count($scope['posts']),'scheduled'=>count(array_filter($scope['posts'],static fn(array $p):bool=>$p['status']==='scheduled')),'templates'=>count($scope['templates']),'folders'=>count($scope['folders']),'permissions'=>count($scope['source_permissions']),'categories'=>count($scope['source_categories']),'fingerprint'=>hash('sha256',self::json($document))];
     }
 
     private function assertAdmin(string $chatId,int $userId):void
@@ -233,13 +375,14 @@ final class PostedTelegramAccountTransfer
         catch(Throwable $error) { throw new DomainException('Telegram не подтвердил права аккаунтов. Перенос не выполнен, повторите проверку позже.',0,$error); }
         $member=$response['result']??null;
         if(empty($response['ok'])||!is_array($member)||!in_array($member['status']??'', ['creator','administrator'],true)||!empty($member['user']['is_bot'])||(int)($member['user']['id']??0)!==$userId) {
-            throw new DomainException('Оба аккаунта должны оставаться владельцем или администратором каждого передаваемого канала. Добавьте новый аккаунт в администраторы до переноса.');
+            throw new DomainException('Telegram не подтвердил действующие права исходного владельца канала. Проверьте доступ старого аккаунта; перенос ничего не изменил.');
         }
     }
 
     private function profile(array $user):array
     {
         $id=(int)$user['telegram_id'];
+        $this->assertOperatorAllowed($id);
         try { $response=($this->telegram)('getChat',['chat_id'=>$id]); }
         catch(Throwable $error) { throw new DomainException('Не удалось проверить получателя. Он должен запустить этого бота через /start и разрешить сообщения.',0,$error); }
         $chat=$response['result']??null;
@@ -249,6 +392,7 @@ final class PostedTelegramAccountTransfer
 
     private function activeUser(int $id):array
     {
+        $this->assertOperatorAllowed($id);
         $rows=$this->rows('SELECT * FROM posted_users WHERE telegram_id=?'.($this->locking?' FOR UPDATE':''),[$id]);
         if(count($rows)!==1||empty($rows[0]['is_active'])) throw new DomainException('Оба аккаунта должны сначала запустить этого бота через /start и иметь действующий доступ к GitPosted.');
         return $rows[0];
@@ -322,6 +466,12 @@ final class PostedTelegramAccountTransfer
     private function assertIds(int $sourceId,int $targetId):void
     {
         if($sourceId<=0||$targetId<=0||$sourceId===$targetId) throw new DomainException('Выберите другой личный Telegram-аккаунт для переноса.');
+        $this->assertOperatorAllowed($sourceId);$this->assertOperatorAllowed($targetId);
+    }
+
+    private function assertOperatorAllowed(int $id): void
+    {
+        if($this->operatorAllowed!==null&&($this->operatorAllowed)($id)!==true)throw new DomainException('Этот аккаунт не включён в список доступа к боту. Перенос ничего не изменил.');
     }
 
     private function rows(string $sql,array $params=[]):array
@@ -329,9 +479,10 @@ final class PostedTelegramAccountTransfer
         $statement=$this->pdo->prepare($sql); $statement->execute($params); return $statement->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    private function execute(string $sql,array $params=[]):void
+    private function execute(string $sql,array $params=[]):int
     {
         $statement=$this->pdo->prepare($sql); $statement->execute($params);
+        return $statement->rowCount();
     }
 
     private static function json(array $data):string

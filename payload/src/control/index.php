@@ -3,8 +3,16 @@
 declare(strict_types=1);
 
 require dirname(__DIR__) . '/bootstrap.php';
+require_once dirname(__DIR__) . '/telegram-policy.php';
+require_once dirname(__DIR__) . '/telegram-top-hold.php';
+require_once dirname(__DIR__) . '/max-top-hold.php';
+require_once dirname(__DIR__) . '/max-policy.php';
+require_once dirname(__DIR__) . '/bot-commands.php';
 require_once dirname(__DIR__) . '/admin-auth-policy.php';
 require_once dirname(__DIR__) . '/bot-commands.php';
+require_once __DIR__ . '/channel-licenses.php';
+require_once __DIR__ . '/settings.php';
+require_once __DIR__ . '/settings-connections.php';
 header('X-Robots-Tag: noindex, nofollow');
 header("Content-Security-Policy: default-src 'self'; script-src 'self' https://hcaptcha.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://hcaptcha.com https://*.hcaptcha.com; img-src 'self' data:; font-src 'self'; connect-src 'self' https://hcaptcha.com https://*.hcaptcha.com; frame-src https://hcaptcha.com https://*.hcaptcha.com; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'");
 header('Referrer-Policy: no-referrer');
@@ -48,7 +56,7 @@ function adminPage(mixed $value): string {
     }
     $allowed = [
         'overview', 'telegram', 'max', 'website',
-        'telegram-data', 'max-data', 'system',
+        'telegram-data', 'max-data', 'system', 'subscriptions',
     ];
     return in_array($page, $allowed, true) ? $page : 'overview';
 }
@@ -132,10 +140,243 @@ function adminAcquireConfigOperationLock(string $dataDirectory): mixed {
     }
 }
 
+function adminReleaseConfigOperationLock():void {
+    if(is_resource($GLOBALS['adminConfigOperationLock']??null)){
+        flock($GLOBALS['adminConfigOperationLock'],LOCK_UN);
+        fclose($GLOBALS['adminConfigOperationLock']);
+    }
+    $GLOBALS['adminConfigOperationLock']=null;
+}
+
+function adminAcquireSettingsOperationGate(string $dataDirectory): mixed {
+    $dataRoot = realpath($dataDirectory);
+    $storage = realpath($dataDirectory . '/storage');
+    if ($dataRoot === false || $storage === false || !is_dir($storage)
+        || !hash_equals($dataRoot, dirname($storage)) || basename($storage) !== 'storage') {
+        throw new RuntimeException('Защищённый каталог настроек недоступен.');
+    }
+    $path = $storage . '/admin-settings-operation.lock';
+    if (is_link($path)) {
+        throw new RuntimeException('Защищённая блокировка настроек недоступна.');
+    }
+    $handle = @fopen($path, 'c+b');
+    if ($handle === false) {
+        throw new RuntimeException('Не удалось заблокировать изменение настроек.');
+    }
+    try {
+        if (!@chmod($path, 0600)) {
+            throw new RuntimeException('Не удалось защитить блокировку настроек.');
+        }
+        clearstatcache(true, $path);
+        if (((int) @fileperms($path) & 0777) !== 0600) {
+            throw new RuntimeException('Блокировка настроек получила небезопасные права.');
+        }
+        $deadline = microtime(true) + 10.0;
+        while (!flock($handle, LOCK_EX | LOCK_NB)) {
+            if (microtime(true) >= $deadline) {
+                throw new RuntimeException('Настройки уже изменяются в другом окне. Повторите действие после его завершения.');
+            }
+            usleep(100000);
+        }
+        return $handle;
+    } catch (Throwable $exception) {
+        fclose($handle);
+        throw $exception;
+    }
+}
+
+/* Inserted into control/index.php after the existing protected atomic writer. */
+function adminSettingsConfigHash(string $path,string $dataDirectory):string {
+    $target=adminConfigWritableTarget($path,$dataDirectory);clearstatcache(true,$target);$hash=hash_file('sha256',$target);
+    return PostedAdminSettings::digest($hash);
+}
+function adminReleaseSettingsOperationGate():void {
+    if(is_resource($GLOBALS['adminSettingsOperationGate']??null)){
+        flock($GLOBALS['adminSettingsOperationGate'],LOCK_UN);fclose($GLOBALS['adminSettingsOperationGate']);
+    }
+    $GLOBALS['adminSettingsOperationGate']=null;
+}
+/** Metadata only. A pending state from another file revision is never reused. */
+function adminSettingsPending(array $session,string $hash):array {
+    $v=$session['admin_settings_sync']??null;
+    if(!is_array($v)||($v['version']??null)!==1||!is_string($v['config_hash']??null)
+        ||!hash_equals($hash,$v['config_hash'])||!is_array($v['pending']??null))return[];
+    $result=[];foreach(['telegram','max','telegram_commands','max_commands']as$platform)if(($v['pending'][$platform]??null)===true)$result[$platform]=true;
+    return$result;
+}
+/** No App, no SQL and no provider API. Every MAX request explicitly disables automatic retries. */
+function adminSettingsConnectionRpc(string $platform,array $config,string $method,array $params):array {
+    if(($GLOBALS['pdo']??null) instanceof PDO&&$GLOBALS['pdo']->inTransaction())throw new LogicException('Connection operation cannot run in a SQL transaction.');
+    if(is_resource($GLOBALS['adminConfigOperationLock']??null))throw new LogicException('Connection operation cannot run under config lock.');
+    if($platform==='telegram'){
+        if(!in_array($method,['getMe','getWebhookInfo','setWebhook','deleteWebhook'],true))throw new LogicException('Denied settings Telegram operation.');
+        return(new PostedTelegram((string)$config['bot_token'],5))->call($method,$params);
+    }
+    if($platform!=='max')throw new LogicException('Denied settings platform.');
+    require_once dirname(__DIR__).'/max-bootstrap.php';
+    $api=new GitPostedMaxApi($config);
+    return match($method){
+        'me'=>$api->request('GET','/me',null,true),
+        'subscriptions'=>$api->request('GET','/subscriptions',null,true),
+        'subscribe'=>$api->request('POST','/subscriptions',$params,true),
+        'unsubscribe'=>$api->request('DELETE','/subscriptions?url='.rawurlencode((string)($params['url']??'')),null,true),
+        default=>throw new LogicException('Denied settings MAX operation.'),
+    };
+}
+/** One complete CAS write. Network preflight and post-save effects happen outside config/SQL locks. */
+function adminSaveUnifiedSettings(array $input,array &$session,string $path,string $dataDirectory):array {
+    if(($GLOBALS['pdo']??null) instanceof PDO&&$GLOBALS['pdo']->inTransaction())throw new LogicException('Settings save cannot run in a SQL transaction.');
+    $GLOBALS['adminSettingsOperationGate']=adminAcquireSettingsOperationGate($dataDirectory);
+    $before=PostedConfig::get();$expected=adminSettingsConfigHash($path,$dataDirectory);
+    $submitted=PostedAdminSettings::digest($input['config_hash']??null);
+    if(!hash_equals($expected,$submitted))throw new InvalidArgumentException('Настройки изменились в другом окне. Обновите страницу.');
+    PostedAdminSettings::requireNonce($session,$input['settings_nonce']??null,$expected);
+    $webReady=true;
+    try{adminTelegramWebModeConfig($before,'1',dirname(__DIR__));}catch(Throwable){$webReady=false;}
+    /* Exactly one normalization: generated secrets remain the same through RO and locked CAS. */
+    $next=PostedAdminSettings::normalise($before,$input,$webReady);
+    $guard=static function()use(&$expected,$path,$dataDirectory):void{
+        if(!hash_equals($expected,adminSettingsConfigHash($path,$dataDirectory)))throw new RuntimeException('Ревизия настроек изменилась.');
+    };
+    $pending=adminSettingsPending($session,$expected);
+    $changed=PostedAdminSettingsConnections::changes($before,$next,$pending);
+    $maxTypes=['message_created'];
+    if(in_array('max',$changed,true)){
+        require_once dirname(__DIR__).'/max-bootstrap.php';$maxTypes=GitPostedMaxBot::webhookUpdateTypes();
+    }
+    $connections=new PostedAdminSettingsConnections('adminSettingsConnectionRpc',$guard,$maxTypes);
+    $prepared=$connections->preflight($before,$next,$input,$pending);$next=$prepared['next'];
+    $GLOBALS['adminConfigOperationLock']=adminAcquireConfigOperationLock($dataDirectory);
+    try{
+        $guard();
+        if(PostedConfig::get()!==$before)throw new InvalidArgumentException('Конфигурация изменилась. Обновите страницу.');
+        if($next!==$before)adminWriteConfig($path,$next,$dataDirectory);
+        $expected=adminSettingsConfigHash($path,$dataDirectory);
+        if(PostedConfig::get()!==$next)throw new RuntimeException('Проверка сохранённых настроек не завершена.');
+        PostedAdminSettings::completeNonce($session,(string)$input['settings_nonce'],$expected);
+        $initialPending=array_fill_keys(array_keys($prepared['plans']),true);
+        if(gitpostedTelegramCommandSets($before)!==gitpostedTelegramCommandSets($next)
+            ||($before['bot_token']??'')!==($next['bot_token']??'')||($before['bot_username']??'')!==($next['bot_username']??'')
+            ||($pending['telegram_commands']??false))$initialPending['telegram_commands']=true;
+        if(gitpostedMaxCommands($before)!==gitpostedMaxCommands($next)
+            ||($before['max_bot_token']??'')!==($next['max_bot_token']??'')||($before['max_bot_username']??'')!==($next['max_bot_username']??'')
+            ||($pending['max_commands']??false))$initialPending['max_commands']=true;
+        $session['admin_settings_sync']=['version'=>1,'config_hash'=>$expected,'pending'=>$initialPending,'updated_at'=>time()];
+    }finally{adminReleaseConfigOperationLock();}
+    /* Caught transport unknowns keep this nonsecret pending metadata; never restore the old config. */
+    $sync=$connections->sync($before,$next,$prepared['plans']);
+    $commands=adminSettingsRefreshCommands($next,$dataDirectory,$guard,$initialPending,$sync['pending']);
+    $sync['pending']+=$commands['pending'];$sync['states']+=$commands['states'];$sync['notices']=array_merge($sync['notices'],$commands['notices']);
+    $session['admin_settings_sync']=['version'=>1,'config_hash'=>$expected,'pending'=>$sync['pending'],'updated_at'=>time()];
+    return['config'=>$next,'config_hash'=>$expected,'pending_sync'=>in_array(true,$sync['pending'],true),
+        'notices'=>$sync['notices'],'states'=>$sync['states'],'requests'=>$sync['requests']+$commands['requests']];
+}
+
+/** Preserve existing command registrations separately from webhook state. No payment or App constructor. */
+function adminSettingsRefreshCommands(array $config,string $dataDirectory,callable $guard,array $requested,array $connections):array {
+    $pending=[];$states=[];$notices=[];$requests=0;
+    if(($requested['telegram_commands']??false)===true){
+        $pending['telegram_commands']=true;
+        if(($connections['telegram']??false)!==true){
+            try{
+                $guard();$report=adminRefreshTelegramCommandMenus($dataDirectory,$guard);
+                $requests+=(int)($report['requests']??0);
+                if(in_array($report['state']??null,['ready','disabled'],true))$pending['telegram_commands']=false;
+                $states['telegram_commands']=$report['state']??'failed';$notices[]=GitPostedTelegramCommandRegistrar::notice($report);
+            }catch(Throwable){$notices[]='Настройки сохранены; меню команд Telegram пока не подтверждено.';}
+        }else $notices[]='Меню команд Telegram будет проверено после подключения.';
+    }
+    if(($requested['max_commands']??false)===true){
+        $pending['max_commands']=true;
+        if(!PostedAdminSettings::effectiveEnabled($config,'max')){$pending['max_commands']=false;$states['max_commands']='disabled';}
+        elseif(($connections['max']??false)!==true){
+            try{
+                $guard();$requests++;$me=adminSettingsMaxCommandRpc($config,'me',[]);
+                $id=$me['user_id']??null;if(is_int($id))$id=(string)$id;
+                if(!is_string($id)||preg_match('/\A[1-9][0-9]{0,18}\z/D',$id)!==1||!is_string($me['username']??null)
+                    ||strcasecmp($me['username'],(string)$config['max_bot_username'])!==0)throw new RuntimeException('MAX command identity mismatch.');
+                $expected=gitpostedMaxCommands($config);$guard();$requests++;$reply=adminSettingsMaxCommandRpc($config,'setCommands',['commands'=>$expected]);
+                $actual=$reply['commands']??null;if(!is_array($actual)||!array_is_list($actual)||count($actual)!==count($expected))throw new RuntimeException('MAX commands missing.');
+                $project=[];foreach($actual as$command){if(!is_array($command)||!is_string($command['name']??null)||!is_string($command['description']??null))throw new RuntimeException('MAX commands malformed.');$project[]=['name'=>ltrim(trim($command['name']),'/'),'description'=>trim($command['description'])];}
+                $sort=static function(array&$commands):void{usort($commands,static fn(array$a,array$b):int=>[$a['name'],$a['description']]<=>[$b['name'],$b['description']]);};$sort($project);$sort($expected);
+                if($project!==$expected)throw new RuntimeException('MAX commands changed.');
+                $guard();$pending['max_commands']=false;$states['max_commands']='ready';$notices[]='Меню команд МАКС обновлено.';
+            }catch(Throwable){$notices[]='Настройки сохранены; меню команд МАКС пока не подтверждено. Сохраните форму ещё раз для проверки.';}
+        }else $notices[]='Меню команд МАКС будет проверено после подключения.';
+    }
+    return['pending'=>$pending,'states'=>$states,'notices'=>$notices,'requests'=>$requests];
+}
+function adminSettingsMaxCommandRpc(array $config,string $method,array $params):array {
+    if(is_resource($GLOBALS['adminConfigOperationLock']??null)||($GLOBALS['pdo']??null) instanceof PDO&&$GLOBALS['pdo']->inTransaction())throw new LogicException('Commands cannot run under config/SQL locks.');
+    require_once dirname(__DIR__).'/max-bootstrap.php';$api=new GitPostedMaxApi($config);
+    return match($method){'me'=>$api->request('GET','/me',null,true),'setCommands'=>$api->request('PATCH','/me/commands',$params,true),default=>throw new LogicException('Denied command operation.')};
+}
+
+/** Existing subscription-card read model, moved out of panel without changing its queries or reviews. */
+function adminBillingReadModel(?PDO $pdo,array $config,array $session,array $query,string $path,string $dataDirectory,string $sessionId,bool $authorized,string $page):array {
+    $billingError='';$billingSelected=null;$billingSearch=null;$billingReview=null;$billingPrices=null;$billingConfigHash=null;
+    $billingPlatform='telegram';$billingQuery='';$billingPage='0';$billingZone=PostedAdminChannelLicenses::timezone($config);
+    if($authorized&&$page==='subscriptions'){
+        try{
+            if(!$pdo instanceof PDO)throw new LogicException('Authorized billing read model needs PDO.');
+            $billingPlatform=PostedAdminChannelLicenses::platform($query['platform']??'telegram');
+            $billingRawQuery=$query['q']??'';$billingRawPage=$query['list_page']??'0';
+            if(!is_string($billingRawQuery)||!is_string($billingRawPage))throw new InvalidArgumentException('Некорректные параметры поиска.');
+            $billingQuery=$billingRawQuery;$billingPage=$billingRawPage;
+            $billingSearch=PostedAdminChannelLicenses::search($pdo,$billingPlatform,$billingQuery,$billingPage);
+            if(isset($query['channel_id']))$billingSelected=PostedAdminChannelLicenses::view($pdo,$billingPlatform,PostedAdminChannelLicenses::id($query['channel_id']));
+            if(isset($query['review'])){$billingReview=PostedAdminChannelLicenses::review($session,$query['review']);PostedAdminChannelLicenses::validatePlan($billingReview,$sessionId,$billingReview['kind']??'');}
+            $billingPrices=PostedAdminChannelLicenses::tariffs($config);
+            $billingConfigHash=hash_file('sha256',adminConfigWritableTarget($path,$dataDirectory));
+            if(!is_string($billingConfigHash))throw new RuntimeException('Не удалось прочитать конфигурацию.');
+        }catch(Throwable $billingException){$billingError=$billingException->getMessage();}
+    }
+    return['error'=>$billingError,'selected'=>$billingSelected,'search'=>$billingSearch,'review'=>$billingReview,'prices'=>$billingPrices,
+        'config_hash'=>$billingConfigHash,'platform'=>$billingPlatform,'query'=>$billingQuery,'page'=>$billingPage,'zone'=>$billingZone];
+}
+
+/** Commands only. Never hold the config/SQL lock during network requests. */
+function adminRefreshTelegramCommandMenus(string $dataDirectory,?callable $revisionGuard=null):array {
+    if(is_resource($GLOBALS['adminConfigOperationLock']??null)
+        ||($GLOBALS['pdo']??null) instanceof PDO&&$GLOBALS['pdo']->inTransaction()){
+        throw new LogicException('Command registration cannot run inside a configuration or SQL operation.');
+    }
+    $failure=['state'=>'failed','confirmed'=>[],'failed'=>[],'requests'=>0];
+    $handle=null;
+    try{
+        if($revisionGuard!==null)$revisionGuard();
+        $current=PostedConfig::get();
+        if(!gitpostedCommandPlatformEnabled($current,'telegram'))return GitPostedTelegramCommandRegistrar::register($current,static fn():never=>throw new LogicException('Disabled transport called.'));
+        $dataRoot=realpath($dataDirectory);$storage=realpath($dataDirectory.'/storage');
+        if($dataRoot===false||$storage===false||dirname($storage)!==$dataRoot||basename($storage)!=='storage')return $failure;
+        $path=$storage.'/admin-telegram-commands.lock';
+        if(is_link($path))return $failure;
+        $handle=@fopen($path,'c+b');
+        if($handle===false||!@chmod($path,0600)||!flock($handle,LOCK_EX|LOCK_NB))return $failure;
+        // A concurrent config save may have completed while the menu lock was acquired.
+        $current=PostedConfig::get();
+        $telegram=new PostedTelegram((string)($current['bot_token']??''),5);
+        $result=GitPostedTelegramCommandRegistrar::register($current,static function(string $method,array $payload)use($telegram,$revisionGuard):array{if($revisionGuard!==null)$revisionGuard();return$telegram->call($method,$payload);});
+        $after=PostedConfig::get();
+        if(($current['bot_token']??null)!==($after['bot_token']??null)
+            ||($current['bot_username']??null)!==($after['bot_username']??null)
+            ||gitpostedTelegramCommandSets($current)!==gitpostedTelegramCommandSets($after))$result['state']='stale';
+        return $result;
+    }catch(Throwable){return $failure;}
+    finally{if(is_resource($handle)){flock($handle,LOCK_UN);fclose($handle);}}
+}
+
 function adminWriteConfig(string $path, array $config, string $dataDirectory): void {
     if (!is_resource($GLOBALS['adminConfigOperationLock'] ?? null)) {
         throw new RuntimeException('Изменение конфигурации требует блокировки настроек.');
     }
+    $rootedGuard=false;$rootedPdo=$GLOBALS['pdo']??null;
+    $rootedBefore=PostedConfig::get();
+    if(PostedTelegramRootedAccess::enabled($rootedBefore)||PostedTelegramRootedAccess::enabled($config)){
+        if(!$rootedPdo instanceof PDO)throw new RuntimeException('Для изменения доступа требуется соединение с базой.');
+        $rootedGuard=PostedTelegramRootedAccess::acquire($rootedPdo,$rootedBefore,true);
+    }
+    try{
     $target = adminConfigWritableTarget($path, $dataDirectory);
     $directory = dirname($target);
     $temporary = $directory . '/.config-admin-' . bin2hex(random_bytes(12)) . '.php';
@@ -200,6 +441,7 @@ function adminWriteConfig(string $path, array $config, string $dataDirectory): v
         }
         throw $exception;
     }
+    }finally{if($rootedPdo instanceof PDO)PostedTelegramRootedAccess::release($rootedPdo,$rootedGuard);}
 }
 /** Read only: never expose a foreign webhook path or query to the browser. */
 function adminTelegramWebhookSnapshot(PostedTelegram $telegram): array {
@@ -220,6 +462,70 @@ function adminAssertTelegramWebhookAccess(PostedTelegram $telegram, array $confi
     }
     return $snapshot;
 }
+/** Config-only preference; it neither enables a platform nor calls Telegram. */
+/** TOP settings are independent of platform registration, pin and advertising quotas. */
+function adminTelegramTopHoldConfig(array $config,array $input):array {
+    $config['telegram_top_hold']=PostedTelegramTopHold::fromAdminDuration($input);return$config;
+}
+function adminTelegramTopQuotaRequest(array $input):array {
+    $channel=(int)PostedTelegramPolicy::positiveId($input['top_channel_id']??null);
+    $user=(int)PostedTelegramPolicy::positiveId($input['top_user_id']??null);
+    $raw=$input['top_remaining']??null;$revision=$input['top_revision']??null;
+    if(!is_string($raw)||preg_match('/\A(?:0|[1-9][0-9]{0,6})\z/D',$raw)!==1||(int)$raw>PostedTelegramTopHold::MAX_QUOTA)
+        throw new InvalidArgumentException('Лимит топов должен быть целым числом от 0 до 1000000.');
+    if(!is_string($revision)||preg_match('/\A(?:0|[1-9][0-9]{0,18})\z/D',$revision)!==1||(string)(int)$revision!==$revision)
+        throw new InvalidArgumentException('Откройте текущий лимит заново.');
+    return['channel_id'=>$channel,'user_id'=>$user,'remaining'=>(int)$raw,'revision'=>(int)$revision];
+}
+function adminTelegramTopQuotaView(PDO $pdo,int $channelId,int $userId):array {
+    $s=$pdo->prepare('SELECT c.*,u.first_name AS top_target_name,u.username AS top_target_username FROM posted_channels c JOIN posted_permissions p ON p.channel_id=c.id AND p.user_id=? JOIN posted_users u ON u.telegram_id=p.user_id WHERE c.id=? AND u.is_active=1 AND (p.can_post=1 OR p.can_schedule=1 OR p.can_manage_posts=1 OR p.can_manage_admins=1) LIMIT 1');
+    $s->execute([$userId,$channelId]);$channel=$s->fetch();
+    if(!is_array($channel))throw new InvalidArgumentException('У пользователя нет действующих прав в этом канале.');
+    $owner=(int)($channel['added_by']??0)===$userId;
+    return['channel_id'=>$channelId,'user_id'=>$userId,'title'=>(string)$channel['title'],'target_name'=>(string)($channel['top_target_name']??''),
+        'target_username'=>(string)($channel['top_target_username']??''),'unlimited'=>$owner,
+        'quota'=>$owner?['remaining'=>null,'revision'=>0]:PostedTelegramTopHold::quota($pdo,$channel,$userId)];
+}
+
+
+/** Shared TOP duration for both platforms; stock and delivery receipts stay separate. */
+function adminMaxTopHoldConfig(array $config,array $input):array {
+    $config['telegram_top_hold']=PostedTelegramTopHold::fromAdminDuration(['telegram_top_hold_minutes'=>$input['max_top_hold_minutes']??null]);return$config;
+}
+function adminMaxTopQuotaRequest(array $input):array {
+    $channel=(int)PostedTelegramPolicy::positiveId($input['max_top_channel_id']??null);$user=$input['max_top_user_id']??null;$raw=$input['max_top_remaining']??null;$revision=$input['max_top_revision']??null;
+    if(!is_string($user)||preg_match('/\A[1-9][0-9]{0,18}\z/D',$user)!==1)throw new InvalidArgumentException('Укажите числовой ID МАКС.');
+    if(!is_string($raw)||preg_match('/\A(?:0|[1-9][0-9]{0,6})\z/D',$raw)!==1||(int)$raw>GitPostedMaxTopHold::MAX_QUOTA)throw new InvalidArgumentException('Лимит топов должен быть целым числом от 0 до 1000000.');
+    if(!is_string($revision)||preg_match('/\A(?:0|[1-9][0-9]{0,18})\z/D',$revision)!==1||(string)(int)$revision!==$revision)throw new InvalidArgumentException('Откройте текущий лимит заново.');
+    return['channel_id'=>$channel,'user_id'=>$user,'remaining'=>(int)$raw,'revision'=>(int)$revision];
+}
+function adminMaxTopQuotaView(PDO $pdo,int $channelId,string $userId):array {
+    if(preg_match('/\A[1-9][0-9]{0,18}\z/D',$userId)!==1)throw new InvalidArgumentException('Некорректный ID МАКС.');
+    $s=$pdo->prepare('SELECT c.*,u.display_name AS top_target_name,u.username AS top_target_username FROM posted_max_channels c JOIN posted_max_users u ON u.max_user_id=? LEFT JOIN posted_max_permissions p ON p.channel_id=c.id AND p.max_user_id=u.max_user_id WHERE c.id=? AND u.is_active=1 AND (c.added_by=u.max_user_id OR p.can_post=1 OR p.can_schedule=1 OR p.can_manage=1) LIMIT 1');$s->execute([$userId,$channelId]);$channel=$s->fetch();
+    if(!is_array($channel))throw new InvalidArgumentException('У пользователя нет действующих прав в этом канале.');$owner=(string)($channel['added_by']??'')===$userId;
+    return['channel_id'=>$channelId,'user_id'=>$userId,'title'=>(string)$channel['title'],'target_name'=>(string)($channel['top_target_name']??''),'target_username'=>(string)($channel['top_target_username']??''),'unlimited'=>$owner,'quota'=>$owner?['remaining'=>null,'revision'=>0]:GitPostedMaxTopHold::quota($pdo,$channel,$userId)];
+}
+function adminMaxLicenseRequest(array $input):array {
+    $id=(int)PostedTelegramPolicy::positiveId($input['max_license_channel_id']??null);$action=$input['max_license_action']??null;$hash=$input['max_license_hash']??null;$expires=$input['max_license_expires_at']??null;
+    if(!in_array($action,['grant','revoke'],true)||!is_string($hash)||preg_match('/\A[a-f0-9]{64}\z/D',$hash)!==1||($action==='grant'&&!is_string($expires)))throw new InvalidArgumentException('Откройте подписку канала заново.');
+    return['channel_id'=>$id,'action'=>$action,'expires_at'=>$action==='grant'?$expires:null,'expected_hash'=>$hash];
+}
+function adminMaxLicenseView(PDO $pdo,int $channelId):array {
+    $s=$pdo->prepare('SELECT * FROM posted_max_channels WHERE id=? LIMIT 1');$s->execute([$channelId]);$channel=$s->fetch();if(!is_array($channel))throw new InvalidArgumentException('Канал МАКС не найден.');
+    $license=GitPostedMaxPolicy::readLicense($pdo,$channel);
+    return['channel_id'=>$channelId,'title'=>(string)$channel['title'],'chat_id'=>(string)$channel['chat_id'],'license'=>$license,'expected_hash'=>GitPostedMaxPolicy::licenseHash($license)];
+}
+
+function adminTelegramWebModeConfig(array $config,mixed $raw,string $webroot):array {
+    if(!is_string($raw)||!in_array($raw,['0','1'],true))throw new InvalidArgumentException('Выберите состояние веб-окна.');
+    if($raw==='1'){
+        if(PostedTelegramWebRequest::serviceBaseUrl($config['base_url']??null)===null)throw new InvalidArgumentException('Для веб-окна нужен HTTPS-адрес этого сервиса.');
+        foreach(['telegram-init-data.php','telegram-web-request.php','telegram-web-bridge.php','telegram-web-http.php','telegram-web-app.php','web-mode.html','web-mode.js','web-mode.css']as$file)
+            if(!is_file($webroot.'/'.$file))throw new RuntimeException('Файлы веб-окна установлены не полностью.');
+    }
+    $config['telegram_web_window_enabled']=$raw==='1';return$config;
+}
+
 function adminTelegramWebhookState(PostedTelegram $telegram, array $config, bool $enabled, bool $takeover = false): void {
     $before = adminAssertTelegramWebhookAccess($telegram, $config, $enabled && $takeover);
     if (!$enabled) {
@@ -281,8 +587,8 @@ function adminToggleTelegram(PostedTelegram $telegram, array $config, bool $enab
     }
 }
 
-function adminConfigureTelegramCommands(PostedTelegram $telegram): void {
-    foreach (gitpostedTelegramCommandSets() as $language => $commands) {
+function adminConfigureTelegramCommands(PostedTelegram $telegram,array $config): void {
+    foreach (gitpostedTelegramCommandSets($config) as $language => $commands) {
         $payload = ['commands' => $commands];
         if ($language !== 'default') $payload['language_code'] = $language;
         $result = $telegram->call('setMyCommands', $payload);
@@ -344,7 +650,7 @@ function adminConfigureTelegram(
     }
     $commandsWarning = '';
     try {
-        adminConfigureTelegramCommands($telegram);
+        adminConfigureTelegramCommands($telegram,$next);
     } catch (Throwable) {
         // The confirmed webhook and new config work together. A partial menu
         // update cannot be rolled back to a foreign service's unknown commands.
@@ -1137,15 +1443,119 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: ' . gitpostedAppPath($config, '/control/?page=overview'), true, 303);
         exit;
     }
+    if ($action === 'admin_settings_save') {
+        try {
+            $saved=adminSaveUnifiedSettings($_POST,$_SESSION,$appConfigPath,$dataDirectory);
+            $config=$saved['config'];
+            adminReleaseSettingsOperationGate();
+            $message='Настройки сохранены.';
+            if($saved['pending_sync'])$message.=' Подключение ожидает синхронизации. Сохраните форму ещё раз для проверки.';
+            elseif($saved['states']!==[])$message.=' Проверки завершены.';
+            if($saved['notices']!==[])$message.=' '.implode(' ',$saved['notices']);
+            $category=PostedAdminSettings::category($_POST['settings_category']);
+            $target=['telegram'=>'telegram','max'=>'max','payments'=>'subscriptions','common'=>'system'][$category];
+            go($message,$target);
+        } catch (Throwable $ex) {
+            adminReleaseConfigOperationLock();adminReleaseSettingsOperationGate();
+            $adminSettingsError=$ex instanceof InvalidArgumentException?$ex->getMessage()
+                :'Проверка настроек не завершена. Проверьте текущее состояние и повторите сохранение.';
+            $adminSettingsInput=[];
+            foreach(array_merge(PostedAdminSettings::TEXT_FIELDS,PostedAdminSettings::FLAGS)as$key){
+                $value=$_POST[$key]??null;
+                if(is_string($value)&&strlen($value)<=24000&&!str_contains($value,"\0"))$adminSettingsInput[$key]=$value;
+            }
+        }
+    } else {
     try {
-        if (in_array($action, ['bot_toggle', 'telegram_config', 'max_config'], true)) {
+        if (in_array($action, ['bot_toggle', 'telegram_config', 'telegram_policy', 'telegram_web_mode', 'telegram_top_hold', 'max_top_hold', 'max_policy', 'max_config', 'admin_channel_tariffs_confirm'], true)) {
             // Different browser sessions must serialize the API effects, the
             // complete config write, and its rollback against one fresh copy.
+            $adminSettingsOperationGate = adminAcquireSettingsOperationGate($dataDirectory);
             $adminConfigOperationLock = adminAcquireConfigOperationLock($dataDirectory);
             $config = PostedConfig::get();
             $baseUrl = rtrim((string) ($config['base_url'] ?? 'https://example.com'), '/');
             $dataDirectory = rtrim((string) ($config['data_dir'] ?? '/var/lib/gitposted'), '/\\');
             adminConfigWritableTarget($appConfigPath, $dataDirectory);
+        }
+        if ($action === 'admin_channel_license_review') {
+            $review=PostedAdminChannelLicenses::prepareLicense($pdo,$_POST,$config,session_id());
+            PostedAdminChannelLicenses::remember($_SESSION,$review);
+            header('Location: '.gitpostedAppPath($config, '/control/').'?page=subscriptions&review='.rawurlencode($review['nonce']),true,303);exit;
+        }
+        if ($action === 'admin_channel_license_confirm') {
+            $review=PostedAdminChannelLicenses::review($_SESSION,$_POST['review_nonce']??null);
+            $receipt=PostedAdminChannelLicenses::confirmLicense($pdo,$review,session_id());
+            go('Подписка канала сохранена. Операция '.$receipt['nonce'].'. Платёж не создавался; публикации и права сохранены.','subscriptions');
+        }
+        if ($action === 'admin_channel_tariffs_review') {
+            $target=adminConfigWritableTarget($appConfigPath,$dataDirectory);
+            $fresh=PostedConfig::get();$hash=hash_file('sha256',$target);
+            if(!is_string($hash))throw new RuntimeException('Не удалось прочитать конфигурацию.');
+            $review=PostedAdminChannelLicenses::prepareTariffs($fresh,$hash,$_POST,session_id());
+            PostedAdminChannelLicenses::remember($_SESSION,$review);
+            header('Location: '.gitpostedAppPath($config, '/control/').'?page=subscriptions&review='.rawurlencode($review['nonce']),true,303);exit;
+        }
+        if ($action === 'admin_channel_tariffs_confirm') {
+            $review=PostedAdminChannelLicenses::review($_SESSION,$_POST['review_nonce']??null);
+            $target=adminConfigWritableTarget($appConfigPath,$dataDirectory);$hash=hash_file('sha256',$target);
+            if(!is_string($hash))throw new RuntimeException('Не удалось прочитать конфигурацию.');
+            $receipt=PostedAdminChannelLicenses::confirmTariffs($pdo,$review,session_id(),$config,$hash,
+                static fn(array $value)=>adminWriteConfig($appConfigPath,$value,$dataDirectory),
+                static fn()=>hash_file('sha256',$target));
+            adminReleaseConfigOperationLock();
+            go('Общие тарифы Telegram и МАКС сохранены. Операция '.$receipt['nonce'].'. Начатые платежи сохраняют прежнюю сумму.','subscriptions');
+        }
+        if ($action === 'max_top_hold') {
+            $newConfig=adminMaxTopHoldConfig($config,$_POST);
+            adminWriteConfig($appConfigPath,$newConfig,$dataDirectory);
+            adminReleaseConfigOperationLock();
+            go('Общая длительность ТОП для Telegram и МАКС сохранена. Действующие сроки, квоты и права сохранены.','max');
+        }
+        if ($action === 'max_top_quota') {
+            $topRequest=adminMaxTopQuotaRequest($_POST);
+            $savedTopQuota=GitPostedMaxTopHold::adminSetQuota($pdo,$topRequest['channel_id'],$topRequest['user_id'],$topRequest['remaining'],$topRequest['revision']);
+            go('Лимит топов МАКС сохранён: '.$savedTopQuota['remaining'].'. Остальные квоты и права сохранены.','max');
+        }
+        if ($action === 'max_policy') {
+            $newConfig=$config;$newConfig['max_policy']=GitPostedMaxPolicy::fromAdmin($_POST);
+            adminWriteConfig($appConfigPath,$newConfig,$dataDirectory);
+            adminReleaseConfigOperationLock();
+            go('Режим оплаты и доступ МАКС сохранены. Публикации, права, квоты и подписки каналов сохранены.','max');
+        }
+        if ($action === 'max_license') {
+            go('Откройте подписки каналов: изменение требует предварительного просмотра и подтверждения.','subscriptions');
+        }
+        if ($action === 'telegram_top_hold') {
+            $newConfig=adminTelegramTopHoldConfig($config,$_POST);
+            adminWriteConfig($appConfigPath,$newConfig,$dataDirectory);
+            adminReleaseConfigOperationLock();
+            go('Длительность ТОП сохранена. Квоты, публикации и права не изменены.','telegram');
+        }
+        if ($action === 'telegram_top_quota') {
+            $topRequest=adminTelegramTopQuotaRequest($_POST);
+            $savedTopQuota=PostedTelegramTopHold::adminSetQuota($pdo,$topRequest['channel_id'],$topRequest['user_id'],$topRequest['remaining'],$topRequest['revision']);
+            go('Лимит топов сохранён: '.$savedTopQuota['remaining'].'. Лимиты публикаций, закреплений и права сохранены.','telegram');
+        }
+        if ($action === 'telegram_web_mode') {
+            $newConfig=adminTelegramWebModeConfig($config,$_POST['telegram_web_window_enabled']??null,dirname(__DIR__));
+            adminWriteConfig($appConfigPath,$newConfig,$dataDirectory);
+            adminReleaseConfigOperationLock();
+            go('Настройки веб-окна сохранены. Пользователь может включить веб-режим в продвинутых настройках бота.','telegram');
+        }
+        if ($action === 'telegram_policy') {
+            $newConfig=$config;
+            $newConfig['telegram_policy']=PostedTelegramPolicy::fromAdmin($_POST);
+            adminWriteConfig($appConfigPath,$newConfig,$dataDirectory);
+            adminReleaseConfigOperationLock();
+            $menuResult=adminRefreshTelegramCommandMenus($dataDirectory);
+            go('Режим оплаты и доступ Telegram сохранены. Публикации, права, квоты и подписки каналов сохранены.'.GitPostedTelegramCommandRegistrar::notice($menuResult),'telegram');
+        }
+        if ($action === 'telegram_commands_refresh') {
+            $menuResult=adminRefreshTelegramCommandMenus($dataDirectory);
+            go(trim(GitPostedTelegramCommandRegistrar::notice($menuResult)),'telegram');
+        }
+        if ($action === 'telegram_channel_license') {
+            go('Откройте подписки каналов: изменение требует предварительного просмотра и подтверждения.','subscriptions');
         }
         if ($action === 'bot_toggle') {
             $platform=(string)($_POST['platform'] ?? '');
@@ -1180,7 +1590,7 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                         // operation. Refresh even an existing URL, then prove
                         // that MAX stored the complete event set.
                         adminCreateAndConfirmMaxSubscription($maxApp,$webhookUrl);
-                        $maxApp->setCommands();
+                        $maxApp->setCommands(true);
                         $newConfig['max_bot_enabled']=true;
                         adminWriteConfig($appConfigPath,$newConfig,$dataDirectory);
                         $configWritten=true;
@@ -1251,8 +1661,10 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$configWritten) {
                 adminWriteConfig($appConfigPath,$newConfig,$dataDirectory);
             }
+            adminReleaseConfigOperationLock();
+            $menuResult=adminRefreshTelegramCommandMenus($dataDirectory);
             go(
-                'Бот ' . ($enabled ? 'включён' : 'отключён') . '.',
+                'Бот ' . ($enabled ? 'включён' : 'отключён') . '.'.GitPostedTelegramCommandRegistrar::notice($menuResult),
                 adminPage($_POST['return_page'] ?? $platform)
             );
         }
@@ -1269,6 +1681,14 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $newConfig['service_admin_username'] = $supportUsername;
             $newConfig['service_admin_url'] = $supportUsername !== '' ? 'https://t.me/' . $supportUsername : '';
+            if (array_key_exists('service_news_username', $_POST)) {
+                $newsUsername = ltrim(trim((string) $_POST['service_news_username']), '@');
+                if ($newsUsername !== '' && preg_match('/\A[A-Za-z0-9_]{5,32}\z/D', $newsUsername) !== 1) {
+                    throw new RuntimeException('Некорректный username канала новостей.');
+                }
+                $newConfig['service_news_username'] = $newsUsername;
+                $newConfig['service_news_url'] = $newsUsername !== '' ? 'https://t.me/' . $newsUsername : '';
+            }
             $submittedToken = trim((string) ($_POST['bot_token'] ?? ''));
             if ($submittedToken !== '') {
                 if (preg_match('/\A[0-9]{6,12}:[A-Za-z0-9_-]{30,200}\z/D', $submittedToken) !== 1) {
@@ -1444,7 +1864,7 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 // confirmed by this token before the configuration switches.
                 $createdNewSubscription=!$newHadSubscription;
                 adminCreateAndConfirmMaxSubscription($maxApp,$maxWebhookUrl,$takeoverMax);
-                $maxApp->setCommands();
+                $maxApp->setCommands(true);
                 $newConfig['max_bot_enabled'] = true;
                 adminWriteConfig($appConfigPath,$newConfig,$dataDirectory);
             } catch (Throwable $exception) {
@@ -1490,6 +1910,8 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif (!$maxBotIdentityKnown && $hasOldMax) {
                 $cleanupWarning.=' Старую подписку не удаляли: идентичность старого токена не подтверждена.';
             }
+            adminReleaseConfigOperationLock();
+            $cleanupWarning.=GitPostedTelegramCommandRegistrar::notice(adminRefreshTelegramCommandMenus($dataDirectory));
             go(
                 'Новый бот МАКС проверен, подключён и включён.'.$cleanupWarning,
                 adminPage($_POST['return_page'] ?? 'max')
@@ -1523,10 +1945,20 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 adminPage($_POST['return_page'] ?? 'telegram-data')
             );
         }
+        if($action==='telegram_rooted_access'){
+            $target=(int)PostedTelegramPolicy::positiveId($_POST['rooted_user_id']??null);
+            if(!is_string($_POST['rooted_revision']??null)||preg_match('/\A(?:0|[1-9][0-9]{0,9})\z/D',$_POST['rooted_revision'])!==1||!in_array($_POST['rooted_can_add']??null,['0','1'],true))throw new InvalidArgumentException('Откройте доступ сотрудника заново.');
+            PostedTelegramRootedAccess::setControl($pdo,$config,$target,$_POST['rooted_can_add']==='1',(int)$_POST['rooted_revision']);
+            go('Право подключения собственных каналов сохранено.','telegram-data');
+        }
         if ($action === 'user_status') {
             $uid=(int)($_POST['user_id'] ?? 0);
             if ($uid < 1) throw new RuntimeException('Пользователь Telegram не указан.');
+            PostedTelegramRootedAccess::begin($pdo,$config,true);
+            try{
             $pdo->prepare('UPDATE posted_users SET is_active=IF(is_active=1,0,1) WHERE telegram_id=:id')->execute(['id'=>$uid]);
+                PostedTelegramRootedAccess::commit($pdo);
+            }catch(Throwable $e){if($pdo->inTransaction())PostedTelegramRootedAccess::rollback($pdo);throw$e;}
             go('Статус пользователя Telegram изменён.');
         }
         if ($action === 'max_user_status') {
@@ -1556,14 +1988,15 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new RuntimeException('В канале завершается закрепление публикации. Повторите отвязку.');
                 }
                 try {
-                    $pdo->beginTransaction();
+                    PostedTelegramRootedAccess::begin($pdo,$config,true);
                     try {
                         $lookup=$pdo->prepare(
-                        'SELECT title,added_by FROM posted_channels WHERE id=:id LIMIT 1 FOR UPDATE'
+                        'SELECT * FROM posted_channels WHERE id=:id LIMIT 1 FOR UPDATE'
                     );
                     $lookup->execute(['id'=>$channelId]);
                     $channel=$lookup->fetch();
                     if (!is_array($channel)) throw new RuntimeException('Канал Telegram не найден.');
+                    PostedTelegramAuthorityPause::closeExplicitLocked($pdo,$channel,'explicit_admin_detach');
                     $pdo->prepare(
                         'UPDATE posted_users telegram_user
                          JOIN posted_permissions permission
@@ -1586,6 +2019,7 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                          WHERE post.channel_id=:channel'
                     )->execute(['channel'=>$channelId]);
                     adminSettleTelegramChannelDetach($pdo,$channelId);
+                    PostedTelegramTopHold::retireChannelQuotasLocked($pdo,$channel);
                     $pdo->prepare(
                         "UPDATE posted_posts
                          SET status='cancelled',scheduled_at=NULL,publish_started_at=NULL,
@@ -1615,14 +2049,16 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                     )->execute(['channel'=>$channelId]);
                     $pdo->prepare('DELETE FROM posted_permissions WHERE channel_id=:channel')
                         ->execute(['channel'=>$channelId]);
+                    $pdo->prepare('DELETE FROM posted_app_settings WHERE setting_key=:key')
+                        ->execute(['key'=>'telegram_channel_transfer_'.$channelId]);
                     $pdo->prepare(
                         'UPDATE posted_channels
                          SET added_by=NULL,is_active=0,admin_blocked=0,is_archived=0
                          WHERE id=:channel'
                     )->execute(['channel'=>$channelId]);
-                        $pdo->commit();
+                        PostedTelegramRootedAccess::commit($pdo);
                     } catch (Throwable $exception) {
-                        if ($pdo->inTransaction()) $pdo->rollBack();
+                        if ($pdo->inTransaction()) PostedTelegramRootedAccess::rollback($pdo);
                         throw $exception;
                     }
                 } finally {
@@ -1659,7 +2095,7 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                     $pdo->beginTransaction();
                     try {
                         $lookup=$pdo->prepare(
-                        'SELECT title,added_by FROM posted_max_channels
+                        'SELECT id,chat_id,title,added_by FROM posted_max_channels
                          WHERE id=:id LIMIT 1 FOR UPDATE'
                     );
                     $lookup->execute(['id'=>$channelId]);
@@ -1681,6 +2117,7 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                         )->execute(['owner'=>$owner]);
                     }
                     adminSettleMaxChannelDetach($pdo,$channelId);
+                    GitPostedMaxTopHold::retireChannelQuotasLocked($pdo,$channel);
                     $pdo->prepare(
                         "UPDATE posted_max_posts
                          SET status='cancelled',scheduled_at=NULL,
@@ -1761,10 +2198,10 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 'trevoga_posted_cron',
                 'gitposted_pin_'.substr(hash('sha256',(string)$channelId),0,32),
                 static function () use ($pdo,$channelId): void {
-                    $pdo->beginTransaction();
+                    PostedTelegramRootedAccess::begin($pdo,$config,true);
                     try {
                         $channelLock=$pdo->prepare(
-                            'SELECT added_by,admin_blocked
+                            'SELECT *
                              FROM posted_channels
                              WHERE id=:channel
                              LIMIT 1
@@ -1773,6 +2210,7 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                         $channelLock->execute(['channel'=>$channelId]);
                         $channel=$channelLock->fetch();
                         if (!is_array($channel)) throw new RuntimeException('Канал Telegram не найден.');
+                        if(PostedTelegramAuthorityPause::blocked($pdo,$channel,true))throw new RuntimeException('Сначала проверьте сохранённые публикации и подтвердите возобновление в боте.');
                         if ((int)($channel['added_by'] ?? 0) <= 0) {
                             throw new RuntimeException('Нельзя включить канал без владельца. Подключите его через бота.');
                         }
@@ -1801,9 +2239,9 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
                         if ($stmt->rowCount() !== 1) {
                             throw new RuntimeException('Статус канала Telegram не изменён.');
                         }
-                        $pdo->commit();
+                        PostedTelegramRootedAccess::commit($pdo);
                     } catch (Throwable $exception) {
-                        if ($pdo->inTransaction()) $pdo->rollBack();
+                        if ($pdo->inTransaction()) PostedTelegramRootedAccess::rollback($pdo);
                         throw $exception;
                     }
                 }
@@ -1893,10 +2331,37 @@ if ($authorized && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $_SESSION['flash_error']=$ex instanceof PDOException ? 'Операция с базой данных не выполнена.' : $ex->getMessage();
         go();
     }
+    } // Legacy actions retain their existing contracts under the common operation gate.
 }
 
 $flash=(string)($_SESSION['flash'] ?? ''); unset($_SESSION['flash']);
 $error=(string)($_SESSION['flash_error'] ?? $_SESSION['login_error'] ?? ''); unset($_SESSION['flash_error'],$_SESSION['login_error']);
+if(isset($adminSettingsError))$error=$adminSettingsError;
+$adminBillingView=adminBillingReadModel($authorized?$pdo:null,$config,$_SESSION,$_GET,$appConfigPath,$dataDirectory,session_id(),$authorized,adminPage($_GET['page']??'overview'));
+$adminSettingsView=null;
+if($authorized){
+    try{
+        $config=PostedConfig::get();
+        $viewHash=adminSettingsConfigHash($appConfigPath,$dataDirectory);
+        $viewConfig=PostedConfig::get();
+        if($viewConfig!==$config)throw new RuntimeException('Settings view changed.');
+        $category=match(adminPage($_GET['page']??'overview')){'max'=>'max','subscriptions'=>'payments','system'=>'common',default=>'telegram'};
+        if(isset($adminSettingsInput)&&is_string($_POST['settings_category']??null)&&in_array($_POST['settings_category'],PostedAdminSettings::CATEGORIES,true))$category=$_POST['settings_category'];
+        $viewNonce=PostedAdminSettings::issueNonce($_SESSION,$viewHash);
+        $adminSettingsView=PostedAdminSettings::view($config,$viewHash,$viewNonce,$category);
+        if(isset($adminSettingsInput))foreach($adminSettingsInput as$key=>$value){
+            if(in_array($key,PostedAdminSettings::FLAGS,true)&&!in_array($value,['0','1'],true))continue;
+            $adminSettingsView['fields'][$key]=$value;
+        }
+        $adminSettingsView['pending_sync']=adminSettingsPending($_SESSION,$viewHash)!==[];
+        if($adminSettingsView['pending_sync'])$adminSettingsView['notices'][]='Настройки сохранены. Подключение ожидает синхронизации; нажмите «Сохранить изменения» для проверки.';
+        if(isset($adminSettingsError))$adminSettingsView['errors']['form']=$adminSettingsError;
+    }catch(Throwable){
+        $adminSettingsError='Настройки временно недоступны. Обновите страницу.';
+        $error=$adminSettingsError;
+    }
+}
+
 $stats=[]; $users=[]; $channels=[]; $telegramEditorsByChannel=[];
 $maxUsers=[]; $maxChannels=[]; $maxEditorsByChannel=[];
 $maxLinkedByTelegram=[]; $maxSchemaInstalled=false; $maxDataError='';
@@ -2056,6 +2521,16 @@ if ($authorized) {
     $stats['users']=$stats['tg_users']+$stats['max_users'];
     $stats['channels']=$stats['tg_channels']+$stats['max_channels'];
     $stats['posts']=$stats['tg_posts']+$stats['max_posts'];
+}
+$rootedAccessView=['selected'=>null,'error'=>''];
+if($authorized&&$page==='telegram-data'&&isset($_GET['rooted_user_id'])){
+    try{
+        $rootedId=(int)PostedTelegramPolicy::positiveId($_GET['rooted_user_id']);
+        $rootedRow=$pdo->prepare('SELECT telegram_id,username,first_name,is_active FROM posted_users WHERE telegram_id=? LIMIT 1');$rootedRow->execute([$rootedId]);$rootedUser=$rootedRow->fetch();
+        if(!is_array($rootedUser))throw new InvalidArgumentException('Пользователь не найден.');
+        $rootedRow=$pdo->prepare('SELECT setting_value FROM posted_app_settings WHERE setting_key=? LIMIT 1');$rootedRow->execute([PostedTelegramRootedAccess::key($rootedId)]);$rootedRaw=$rootedRow->fetchColumn();
+        $rootedAccessView['selected']=['user'=>$rootedUser,'control'=>PostedTelegramRootedAccess::control($rootedRaw===false?null:json_decode($rootedRaw,true,16,JSON_THROW_ON_ERROR),$rootedId)];
+    }catch(Throwable){$rootedAccessView['error']='Не удалось открыть доступ. Проверьте Telegram ID и сохранённые настройки.';}
 }
 require __DIR__ . '/panel.php';
 exit;

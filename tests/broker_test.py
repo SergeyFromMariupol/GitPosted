@@ -81,6 +81,13 @@ class BrokerTests(unittest.TestCase):
         self.persist()
         return broker.Broker()
 
+    def start_job(self, app, telegram=False, max_enabled=False):
+        # Use the production durable job creation; intercept only the worker launch.
+        with mock.patch.object(broker.threading, "Thread", side_effect=lambda **kwargs: types.SimpleNamespace(start=lambda: os.close(kwargs["args"][0]))):
+            app.dispatch("start", {"settings": valid_settings(telegram, max_enabled)})
+        self.assertEqual(app.public["job"]["id"], p.read_json(self.state / "private.json")["job"]["id"])
+        return app.public["job"]["id"]
+
     def execute(self, app):
         descriptor = os.open(self.state / "fixture-operation.lock", os.O_CREAT | os.O_RDWR, 0o600)
         app.execute(descriptor)  # execute owns/closes only this fixture descriptor
@@ -201,28 +208,89 @@ class BrokerTests(unittest.TestCase):
         self.assertNotIn(code, (self.state / "private.json").read_text())
 
     def test_config_is_durably_false_before_schema_and_selected_api_then_activates_only_selected(self):
-        for telegram, max_enabled in ((False, False), (True, False), (False, True)):
+        for telegram, max_enabled in ((False, False), (True, False), (False, True), (True, True)):
             with self.subTest(telegram=telegram, max=max_enabled):
                 app = self.make()
-                app.private["settings"] = broker.settings(valid_settings(telegram, max_enabled))
+                job_id = self.start_job(app, telegram, max_enabled)
                 writes, calls = [], []
+                plan_sha, certificate_sha = "d" * 64, "c" * 64
+                sources = {"readers": {"fixture.php": "a" * 64}, "reader_manifest_sha256": "a" * 64,
+                           "helper_sha256": "b" * 64, "registration_proof": {"job_id": job_id}}
+                capability = False
                 app.write_config = lambda value: writes.append(json.loads(json.dumps(value)))
                 def system(argv, **kwargs):
                     self.assertNotIn("long-fixture-password", json.dumps([str(x) for x in argv]))
                     return b"0" if "-NBe" in argv else b""
                 def application(value, **kwargs):
+                    nonlocal capability
                     calls.append(value)
+                    if kwargs.get("native_clean"):
+                        self.assertEqual(value["creation_receipt"]["job_id"], job_id)
+                        self.assertFalse(writes[-1]["telegram_bot_enabled"])
+                        self.assertFalse(writes[-1]["max_bot_enabled"])
+                        if value["action"] == "inspect":
+                            return {"complete": value["phase"] not in ("before_schema", "schema_started"),
+                                    "capability_state": "same" if capability else "absent", "plan": {"fixture": True},
+                                    "plan_sha256": plan_sha, "certificate_sha256": certificate_sha}
+                        self.assertEqual(value["action"], "enable_clean")
+                        self.assertTrue(value["allow_insert"])
+                        self.assertEqual(p.read_json(self.state / "private.json")["native_clean"]["phase"], "enable_started")
+                        self.assertFalse(capability)
+                        capability = True
+                        return {"enabled": True, "certificate_sha256": certificate_sha}
+                    if value["action"] == "installation_state":
+                        return {"configured": True, "telegram_enabled": writes[-1]["telegram_bot_enabled"],
+                                "max_enabled": writes[-1]["max_bot_enabled"]}
                     if value["action"] == "check": return {"identity": {"id": "123456" if value["platform"] == "telegram" else "987654", "username": "LocalTelegramBot" if value["platform"] == "telegram" else "LocalMaxBot"}}
                     self.assertTrue(writes)
                     self.assertIs(writes[-1]["telegram_bot_enabled"], False)
                     self.assertIs(writes[-1]["max_bot_enabled"], False)
                     return {}
-                with mock.patch.object(p, "run", side_effect=system), mock.patch.object(broker, "helper", side_effect=application):
+                # Filesystem attestation belongs to native protocol tests; keep actual broker transitions here.
+                with mock.patch.object(p, "run", side_effect=system), mock.patch.object(broker, "helper", side_effect=application), mock.patch.object(app, "native_clean_sources", return_value=sources):
                     for step in ("database", "config", "schema", "telegram", "max", "verify", "activate"):
-                        app.install_step(step)
+                        row = next(row for row in app.public["job"]["steps"] if row["id"] == step)
+                        row["status"] = "running"; app.save()
+                        result = app.install_step(step)
+                        row["status"] = "skipped" if result == "skipped" else "done"; app.save()
+                self.assertTrue(capability)
+                self.assertEqual(app.private["database_creation"]["job_id"], job_id)
+                self.assertEqual(app.private["native_clean"]["phase"], "enabled")
                 self.assertEqual([call["platform"] for call in calls if call["action"] == "register"], [name for name, enabled in (("telegram", telegram), ("max", max_enabled)) if enabled])
                 self.assertEqual((writes[-1]["telegram_bot_enabled"], writes[-1]["max_bot_enabled"]), (telegram, max_enabled))
                 self.assertEqual(p.read_json(self.state / "private.json")["config"]["admin_auth"]["password_hash"], "hashed-fixture-password")
+
+    def test_authorized_revision_replans_only_config_with_unchanged_capability_and_schema(self):
+        for scenario in ('authorized', 'unrecorded', 'structure_changed'):
+            with self.subTest(scenario=scenario):
+                app = self.make()
+                job_id = self.start_job(app)
+                config = {'timezone': 'UTC', 'telegram_bot_enabled': False, 'max_bot_enabled': False}
+                previous = {'disabled_config_sha256': app.native_clean_hash(config), 'structure': 'same', 'readers': 'same'}
+                app.private['native_clean'] = {'phase': 'enabled', 'plan': previous,
+                    'plan_sha256': app.native_clean_hash(previous), 'certificate_sha256': 'c' * 64}
+                authorization = app.native_reconfiguration(config)
+                config['timezone'] = 'Europe/Moscow'
+                authorization['config_sha256'] = app.native_clean_hash(config)
+                if scenario != 'unrecorded': app.private['native_reconfiguration'] = authorization
+                revised = {**previous, 'disabled_config_sha256': app.native_clean_hash(config)}
+                if scenario == 'structure_changed': revised['structure'] = 'changed'
+                response = {'complete': True, 'capability_state': 'same', 'certificate_sha256': 'c' * 64,
+                            'plan': revised, 'plan_sha256': app.native_clean_hash(revised)}
+                app.save()
+                with mock.patch.object(app, 'native_clean_request', return_value={'action': 'inspect'}) as request, mock.patch.object(broker, 'helper', return_value=response) as helper:
+                    if scenario == 'authorized':
+                        app.verify_native_clean_before_activation(config)
+                        self.assertEqual(app.private['native_clean']['plan'], revised)
+                        self.assertNotIn('native_reconfiguration', app.private)
+                        self.assertEqual(p.read_json(self.state / 'private.json')['native_clean']['plan'], revised)
+                    else:
+                        with self.assertRaises(p.Failure): app.verify_native_clean_before_activation(config)
+                        self.assertEqual(app.private['native_clean']['plan'], previous)
+                    request.assert_called_once_with(config, 'inspect', registration_reconcile=True)
+                    helper.assert_called_once_with({'action': 'inspect'}, timeout=60, native_clean=True)
+                self.assertEqual(app.private['native_clean']['certificate_sha256'], 'c' * 64)
+                self.assertEqual(app.public['job']['id'], job_id)
 
 
 class HandlerTests(unittest.TestCase):

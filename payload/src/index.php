@@ -2,6 +2,36 @@
 
 declare(strict_types=1);
 
+if (($_GET['yookassa_webhook'] ?? null) === '1') {
+    require __DIR__ . '/telegram-yookassa-webhook.php';
+    exit;
+}
+
+if (($_GET['checkout'] ?? null) === 'max') {
+    require __DIR__ . '/max-checkout.php';
+    exit;
+}
+
+if (($_GET['telegram_webapp'] ?? null) === '1') {
+    require __DIR__ . '/telegram-web-app.php';
+    exit;
+}
+
+if (array_key_exists('preview_media', $_GET)) {
+    require_once __DIR__ . '/telegram-preview-media.php';
+    gitpostedServeTelegramPreviewMediaRequest();
+}
+
+if (($_GET['help'] ?? null) === '1') {
+    require __DIR__ . '/help.php';
+    exit;
+}
+
+if (($_GET['checkout'] ?? null) === 'telegram') {
+    require __DIR__ . '/telegram-checkout.php';
+    exit;
+}
+
 require __DIR__ . '/public-site.php';
 $siteConfig = PostedConfig::get();
 $siteBaseUrl = rtrim((string) ($siteConfig['base_url'] ?? 'https://example.com'), '/');

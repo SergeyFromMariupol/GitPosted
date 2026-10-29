@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+require_once __DIR__.'/telegram-template-media.php';
 
 /** Private immutable media. Only opaque generated markers enter post payloads. */
 final class GitPostedPostLinkAssets
@@ -77,10 +78,14 @@ final class GitPostedPostLinkAssets
             $payload[$field] = self::upload($value, $config);
             return $payload;
         }
-        if (!in_array($method, ['sendMediaGroup', 'editMessageMedia'], true)) return null;
+        if (!in_array($method, ['sendMediaGroup', 'sendPaidMedia', 'editMessageMedia'], true)) return null;
         $media = $payload['media'] ?? null;
         if (is_string($media)) $media = json_decode($media, true);
         if (!is_array($media)) return null;
+        if($method==='sendPaidMedia'){
+            if(!array_is_list($media)||$media===[]||count($media)>10)throw new InvalidArgumentException('Invalid paid media upload count.');
+            foreach($media as$item)if(!is_array($item)||!in_array($item['type']??null,['photo','video'],true))throw new InvalidArgumentException('Invalid paid media upload type.');
+        }
         $items = $method === 'editMessageMedia' ? [$media] : $media;
         $changed = false;
         foreach ($items as $index => &$item) {
@@ -124,6 +129,7 @@ final class GitPostedPostLinkAssets
                     foreach ($matches[1] as $id) $used[$id] = true;
                 }
             }
+            $used += PostedTelegramTemplateMedia::assetReferences($pdo);
             $removed = 0;
             foreach (new DirectoryIterator($root) as $entry) {
                 if ($removed >= 1000) break;

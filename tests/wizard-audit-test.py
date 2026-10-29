@@ -58,14 +58,15 @@ class WizardCrashAudit(unittest.TestCase):
 
     def failed_install(self):
         app = self.fixture.make()
-        app.private['settings'] = broker.settings(fixtures.valid_settings(True, True))
+        self.original_job_id = self.fixture.start_job(app, True, True)
         with mock.patch.object(p, 'run', return_value=b'0'):
             app.install_step('database')
-        app.private['database_owned'] = True
-        app.public['job'] = {'id': 'original-job', 'type': 'install', 'status': 'failed',
-                            'steps': [{'id': step, 'status': 'done' if step in ('database', 'config', 'schema', 'telegram')
-                                       else ('failed' if step == 'max' else 'pending')}
-                                      for step in ('database', 'config', 'schema', 'telegram', 'max', 'verify', 'activate', 'finish')]}
+        self.assertEqual(app.private['database_creation']['job_id'], self.original_job_id)
+        self.assertEqual(app.private['database_creation']['phase'], 'database_ready')
+        app.public['job']['status'] = 'failed'
+        for row in app.public['job']['steps']:
+            row['status'] = ('done' if row['id'] in ('database', 'config', 'schema', 'telegram')
+                             else 'failed' if row['id'] == 'max' else 'pending')
         app.save()
         return app
 
@@ -79,7 +80,7 @@ class WizardCrashAudit(unittest.TestCase):
         with mock.patch.object(p, 'save_json', side_effect=lambda path, value, public=False: self.fixture.save_json(path, value, public) if not public else (_ for _ in ()).throw(OSError('projection crash'))):
             with self.assertRaises(OSError): app.save()
         recovered = broker.Broker()
-        self.assertEqual(recovered.public['job']['id'], 'original-job')
+        self.assertEqual(recovered.public['job']['id'], self.original_job_id)
         self.assertEqual(recovered.public['site_url'], 'https://committed.example')
         self.assertEqual(p.read_json(self.fixture.state / 'public.json')['site_host'], 'committed.example')
 
@@ -112,7 +113,7 @@ class WizardCrashAudit(unittest.TestCase):
         changed['admin']['username'] = 'new_operator'
         result = self.revise(app, changed)
         config = app.private['config']
-        self.assertEqual(result['job']['id'], 'original-job')
+        self.assertEqual(result['job']['id'], self.original_job_id)
         self.assertEqual(config['database'], before['database'])
         self.assertTrue(app.private['database_owned'])
         self.assertEqual(config['admin_auth']['username'], 'new_operator')

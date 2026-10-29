@@ -6,11 +6,53 @@ date_default_timezone_set('Europe/Moscow');
 require_once __DIR__ . '/web-path.php';
 require_once __DIR__ . '/account.php';
 require_once __DIR__ . '/publication-plan.php';
+require_once __DIR__ . '/telegram-native-content.php';
+require_once __DIR__ . '/telegram-native-store.php';
+require_once __DIR__ . '/telegram-native-runtime.php';
 require_once __DIR__ . '/post-link.php';
 require_once __DIR__ . '/telegram-native-forward.php';
 require_once __DIR__ . '/telegram-post-links.php';
 require_once __DIR__ . '/telegram-account-transfer.php';
 require_once __DIR__ . '/telegram-account-transfer-ui.php';
+require_once __DIR__ . '/telegram-authority-pause.php';
+require_once __DIR__ . '/telegram-authority-pause-ui.php';
+require_once __DIR__ . '/telegram-top-hold.php';
+require_once __DIR__ . '/telegram-preview-proof.php';
+require_once __DIR__ . '/telegram-album-collector.php';
+require_once __DIR__ . '/telegram-template-media.php';
+require_once __DIR__ . '/telegram-template-media-ui.php';
+require_once __DIR__ . '/telegram-native-template-ui.php';
+require_once __DIR__ . '/telegram-published-album-editor.php';
+require_once __DIR__ . '/telegram-published-album-editor-ui.php';
+require_once __DIR__ . '/telegram-published-album-panel.php';
+require_once __DIR__ . '/telegram-button-ui.php';
+require_once __DIR__ . '/telegram-public-button-layout.php';
+require_once __DIR__ . '/telegram-public-button-edit.php';
+require_once __DIR__ . '/telegram-public-button-integration.php';
+require_once __DIR__ . '/telegram-cp-delete-confirm.php';
+require_once __DIR__ . '/telegram-cp-detail-receipt.php';
+require_once __DIR__ . '/telegram-published-single-ui.php';
+require_once __DIR__ . '/telegram-top-ui.php';
+require_once __DIR__ . '/telegram-top-quota-ui.php';
+require_once __DIR__ . '/telegram-draft-ui.php';
+require_once __DIR__ . '/telegram-draft-panel.php';
+require_once __DIR__ . '/telegram-post-options.php';
+require_once __DIR__ . '/telegram-transport-layout.php';
+require_once __DIR__ . '/telegram-media-options.php';
+require_once __DIR__ . '/telegram-web-bridge.php';
+require_once __DIR__ . '/telegram-policy.php';
+require_once __DIR__ . '/telegram-comments.php';
+require_once __DIR__ . '/telegram-comments-reader.php';
+require_once __DIR__ . '/telegram-comments-integration.php';
+require_once __DIR__ . '/telegram-billing-api.php';
+require_once __DIR__ . '/bot-commands.php';
+require_once __DIR__ . '/telegram-payment-support.php';
+require_once __DIR__ . '/telegram-subscription-ui.php';
+require_once __DIR__ . '/telegram-preview-media.php';
+require_once __DIR__ . '/telegram-multipost-delivery.php';
+require_once __DIR__ . '/telegram-ui.php';
+require_once __DIR__ . '/telegram-content-plan.php';
+require_once __DIR__ . '/telegram-emoji-catalog.php';
 
 final class PostedConfig
 {
@@ -201,7 +243,7 @@ final class PostedDb
                 text_entities_json JSON DEFAULT NULL,
                 autosignature_text VARCHAR(255) DEFAULT NULL,
                 autosignature_entities_json JSON DEFAULT NULL,
-                media_type ENUM('none','photo','video','animation','document','audio','voice') NOT NULL DEFAULT 'none',
+                media_type ENUM('none','photo','video','animation','document','audio','voice','video_note','sticker','poll','location','contact') NOT NULL DEFAULT 'none',
                 media_file_id VARCHAR(255) DEFAULT NULL,
                 media_json JSON DEFAULT NULL,
                 telegram_preview_chat_id VARCHAR(64) DEFAULT NULL,
@@ -225,7 +267,7 @@ final class PostedDb
                 reply_message_id BIGINT DEFAULT NULL,
                 external_chat_id VARCHAR(64) DEFAULT NULL,
                 external_message_id BIGINT DEFAULT NULL,
-                original_media_type ENUM('none','photo','video','animation','document','audio','voice') NOT NULL DEFAULT 'none',
+                original_media_type ENUM('none','photo','video','animation','document','audio','voice','video_note','sticker','poll','location','contact') NOT NULL DEFAULT 'none',
                 repost_chat_id VARCHAR(64) DEFAULT NULL,
                 repost_message_id BIGINT DEFAULT NULL,
                 repost_input_chat_id VARCHAR(64) DEFAULT NULL,
@@ -281,9 +323,9 @@ final class PostedDb
         self::ensureColumn($pdo, 'posted_posts', 'reply_message_id', "ALTER TABLE posted_posts ADD COLUMN reply_message_id BIGINT DEFAULT NULL AFTER reply_chat_id");
         self::ensureColumn($pdo, 'posted_posts', 'external_chat_id', "ALTER TABLE posted_posts ADD COLUMN external_chat_id VARCHAR(64) DEFAULT NULL AFTER reply_message_id");
         self::ensureColumn($pdo, 'posted_posts', 'external_message_id', "ALTER TABLE posted_posts ADD COLUMN external_message_id BIGINT DEFAULT NULL AFTER external_chat_id");
-        self::ensureColumn($pdo, 'posted_posts', 'original_media_type', "ALTER TABLE posted_posts ADD COLUMN original_media_type ENUM('none','photo','video','animation','document','audio','voice') NOT NULL DEFAULT 'none' AFTER external_message_id");
-        self::ensureColumnType($pdo, 'posted_posts', 'media_type', "enum('none','photo','video','animation','document','audio','voice')", "ALTER TABLE posted_posts MODIFY media_type ENUM('none','photo','video','animation','document','audio','voice') NOT NULL DEFAULT 'none'");
-        self::ensureColumnType($pdo, 'posted_posts', 'original_media_type', "enum('none','photo','video','animation','document','audio','voice')", "ALTER TABLE posted_posts MODIFY original_media_type ENUM('none','photo','video','animation','document','audio','voice') NOT NULL DEFAULT 'none'");
+        self::ensureColumn($pdo, 'posted_posts', 'original_media_type', "ALTER TABLE posted_posts ADD COLUMN original_media_type ENUM('none','photo','video','animation','document','audio','voice','video_note','sticker','poll','location','contact') NOT NULL DEFAULT 'none' AFTER external_message_id");
+        self::ensureColumnType($pdo, 'posted_posts', 'media_type', "enum('none','photo','video','animation','document','audio','voice','video_note','sticker','poll','location','contact')", "ALTER TABLE posted_posts MODIFY media_type ENUM('none','photo','video','animation','document','audio','voice','video_note','sticker','poll','location','contact') NOT NULL DEFAULT 'none'");
+        self::ensureColumnType($pdo, 'posted_posts', 'original_media_type', "enum('none','photo','video','animation','document','audio','voice','video_note','sticker','poll','location','contact')", "ALTER TABLE posted_posts MODIFY original_media_type ENUM('none','photo','video','animation','document','audio','voice','video_note','sticker','poll','location','contact') NOT NULL DEFAULT 'none'");
         self::ensureColumn($pdo, 'posted_posts', 'repost_chat_id', "ALTER TABLE posted_posts ADD COLUMN repost_chat_id VARCHAR(64) DEFAULT NULL AFTER original_media_type");
         self::ensureColumn($pdo, 'posted_posts', 'repost_message_id', "ALTER TABLE posted_posts ADD COLUMN repost_message_id BIGINT DEFAULT NULL AFTER repost_chat_id");
         self::ensureColumn($pdo, 'posted_posts', 'repost_input_chat_id', "ALTER TABLE posted_posts ADD COLUMN repost_input_chat_id VARCHAR(64) DEFAULT NULL AFTER repost_message_id");
@@ -374,7 +416,7 @@ final class PostedDb
                 title VARCHAR(255) NOT NULL,
                 text MEDIUMTEXT DEFAULT NULL,
                 text_entities_json JSON DEFAULT NULL,
-                media_type ENUM('none','photo','video','animation','document','audio','voice') NOT NULL DEFAULT 'none',
+                media_type ENUM('none','photo','video','animation','document','audio','voice','video_note','sticker','poll','location','contact') NOT NULL DEFAULT 'none',
                 media_file_id VARCHAR(255) DEFAULT NULL,
                 buttons_json JSON DEFAULT NULL,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -384,8 +426,8 @@ final class PostedDb
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
         );
         self::ensureColumn($pdo, 'posted_templates', 'text_entities_json', "ALTER TABLE posted_templates ADD COLUMN text_entities_json JSON DEFAULT NULL AFTER text");
-        self::ensureColumn($pdo, 'posted_templates', 'media_type', "ALTER TABLE posted_templates ADD COLUMN media_type ENUM('none','photo','video','animation','document','audio','voice') NOT NULL DEFAULT 'none' AFTER text");
-        self::ensureColumnType($pdo, 'posted_templates', 'media_type', "enum('none','photo','video','animation','document','audio','voice')", "ALTER TABLE posted_templates MODIFY media_type ENUM('none','photo','video','animation','document','audio','voice') NOT NULL DEFAULT 'none'");
+        self::ensureColumn($pdo, 'posted_templates', 'media_type', "ALTER TABLE posted_templates ADD COLUMN media_type ENUM('none','photo','video','animation','document','audio','voice','video_note','sticker','poll','location','contact') NOT NULL DEFAULT 'none' AFTER text");
+        self::ensureColumnType($pdo, 'posted_templates', 'media_type', "enum('none','photo','video','animation','document','audio','voice','video_note','sticker','poll','location','contact')", "ALTER TABLE posted_templates MODIFY media_type ENUM('none','photo','video','animation','document','audio','voice','video_note','sticker','poll','location','contact') NOT NULL DEFAULT 'none'");
         self::ensureColumn($pdo, 'posted_templates', 'media_file_id', "ALTER TABLE posted_templates ADD COLUMN media_file_id VARCHAR(255) DEFAULT NULL AFTER media_type");
         $pdo->exec(
             "CREATE TABLE IF NOT EXISTS posted_edit_sessions (
@@ -641,6 +683,15 @@ final class PostedDb
 
     private static function ensureColumnType(PDO $pdo, string $table, string $column, string $expectedType, string $alterSql): void
     {
+        if(PostedTelegramNativeSchema::protectedColumn($table,$column)){
+            $actual=PostedTelegramNativeSchema::columnType($pdo,$table,$column);
+            $legacy="enum('none','photo','video','animation','document','audio','voice')";
+            if(!PostedTelegramNativeSchema::supportedSuperset($actual,$legacy))throw new RuntimeException('Telegram media enum requires explicit compatibility review.');
+            // Existing supported columns, including future supersets, are NEVER narrowed or automatically widened here.
+            // An explicit additive migration and a verified capability certificate enable the new ingress separately.
+            return;
+        }
+
         $stmt = $pdo->prepare(
             "SELECT COLUMN_TYPE
              FROM INFORMATION_SCHEMA.COLUMNS
@@ -916,6 +967,37 @@ final class PostedBot
 {
     use GitPostedTelegramPostLinks;
     use GitPostedTelegramAccountTransferUi;
+    use PostedTelegramAuthorityPauseCore;
+    use GitPostedTelegramTopHold;
+    use PostedTelegramTopUi;
+    use PostedTelegramAlbumUi;
+    use GitPostedTelegramTemplateMediaUi;
+    use GitPostedTelegramNativeTemplateUi;
+    use PostedTelegramPublishedAlbumEditorUi;
+    use GitPostedTelegramPublishedAlbumPanel;
+    use GitPostedTelegramPublicButtonIntegration;
+    use GitPostedTelegramCpDeleteConfirmation;
+    use GitPostedTelegramCpDetailReceipt;
+    use GitPostedTelegramPublishedSingleUi;
+    use PostedTelegramTopQuotaUi;
+    use PostedTelegramAuthorityPauseUi;
+    use GitPostedTelegramDraftUi;
+    use GitPostedTelegramDraftPanel;
+    use GitPostedTelegramPostOptions;
+    use GitPostedTelegramNativeRuntime;
+    use GitPostedTelegramMediaOptions;
+    use GitPostedTelegramWebBridge;
+    use GitPostedTelegramContentPlanUi;
+    use GitPostedTelegramPolicy;
+    use PostedTelegramCommentsHooksPrototype05;
+    use PostedTelegramCommentsReaderHooksV3;
+    use GitPostedTelegramCommentsIntegration;
+    use GitPostedTelegramPaymentSupportHandler;
+    use PostedTelegramSubscriptionUi;
+    use GitPostedTelegramMultipost;
+    use GitPostedTelegramMultipostDelivery;
+    use PostedTelegramPreviewMediaUi;
+    use PostedTelegramEmojiCatalogUi;
     private const TEXT_LIMIT = 4096;
     private const PHOTO_CAPTION_LIMIT = 1024;
     private const HIDDEN_TEXT_LIMIT = 190;
@@ -935,6 +1017,8 @@ final class PostedBot
     /** @var array<string, bool|null> */
     private array $telegramChannelAdminCache = [];
     private ?int $telegramBotIdCache = null;
+    private ?int $telegramTransferredBotIdCache = null;
+    private array $telegramUiLanguageCache = [];
 
     private const MAIN_KEYBOARD = [
         [
@@ -960,6 +1044,7 @@ final class PostedBot
 
     public function handle(array $update): void
     {
+        if($this->observeTelegramDiscussionRoot($update))return;
         if (isset($update['channel_post']) && is_array($update['channel_post'])) {
             $this->handleTelegramChannelPost(
                 $update['channel_post'],
@@ -968,10 +1053,9 @@ final class PostedBot
             return;
         }
         if (isset($update['edited_channel_post']) && is_array($update['edited_channel_post'])) {
-            $this->handleTelegramChannelPost(
-                $update['edited_channel_post'],
-                max(0, (int) ($update['update_id'] ?? 0))
-            );
+            // Editing an existing message cannot prove a new delivery slot.
+            // Original channel_post updates and known API acknowledgements keep
+            // their existing reconciliation paths.
             return;
         }
         if (isset($update['my_chat_member']) && is_array($update['my_chat_member'])) {
@@ -1010,6 +1094,7 @@ final class PostedBot
         $this->resumeReconciledTelegramAttempts();
         $this->resumeForceCancelledTelegramAttempts();
         $this->resumeCompletedTelegramEffects();
+        $this->resumeTelegramMultiposts();
         $this->notifyExpiredTelegramAttempts();
         $stmt = $this->pdo->query(
             "SELECT p.*, c.chat_id
@@ -1035,6 +1120,7 @@ final class PostedBot
                AND p.scheduled_at <= NOW()
                AND c.is_active = 1
                AND c.bot_can_post = 1
+               AND ".PostedTelegramAuthorityPause::dueSql('c')."
                AND c.added_by IS NOT NULL
                AND c.added_by > 0
                AND (
@@ -1053,7 +1139,7 @@ final class PostedBot
               LIMIT 30"
         );
         foreach ($stmt->fetchAll() as $candidate) {
-            $post=$this->claimPostForPublish((int)$candidate['id'],['scheduled'],true);
+            try{$post=$this->claimPostForPublish((int)$candidate['id'],['scheduled'],true);}catch(PostedTelegramAuthorityPauseException){continue;}
             if(!$post)continue;
             try {
                 $outcome=$this->publishClaimedPost($post);
@@ -1150,6 +1236,7 @@ final class PostedBot
 
     private function deleteDueTelegramPost(array $post): bool
     {
+        $override=$this->telegramPublicDeleteOverride($post,'due');if($override!==null)return$override;
         $postId=(int)($post['id']??0);
         $channelId=(int)($post['channel_id']??0);
         if($postId<=0||$channelId<=0)return false;
@@ -1226,6 +1313,9 @@ final class PostedBot
 
     private function handleMessage(array $message): void
     {
+        if(($message['chat']['type']??null)==='private'&&PostedTelegramRootedAccess::enabled(PostedTelegramRootedAccess::current($this->config))&&!$this->telegramPolicyAllowOperator((int)($message['from']['id']??0)))return;
+        if($this->handleTelegramTemplateMediaIngress($message))return;
+        if($this->handleTelegramAlbumIngress($message))return;
         $chat = (array) ($message['chat'] ?? []);
         if (($chat['type'] ?? '') !== 'private') {
             return;
@@ -1235,12 +1325,22 @@ final class PostedBot
         if ($userId <= 0) {
             return;
         }
+        if (!$this->telegramPolicyAllowOperator($userId)) return;
+        $subscriptionNewUser=$this->telegramSubscriptionPaid()&&$this->user($userId)===null;
         $this->upsertUser($from);
         PostedAccounts::forTelegram($this->pdo, $userId);
         $user = $this->user($userId);
+        if($this->handleTelegramTopQuotaInput($message,$user))return;
         if (!$this->isKnownActiveUser($user)) {
             $this->telegram->sendMessage($userId, 'Доступ не выдан. Напишите владельцу бота ваш Telegram ID: ' . $userId);
             return;
+        }
+        if($this->handleTelegramPaymentSupportMessage($userId,$message))return;
+        if(array_key_exists('paid_media',$message)&&(string)($user['state']??'')!=='await_edit_forward'){
+            $this->telegram->sendMessage($userId,'Копирование внешнего платного медиа пока недоступно. Подпись не будет сохранена вместо платного содержимого.');return;
+        }
+        if(array_key_exists('has_media_spoiler',$message)&&!is_bool($message['has_media_spoiler'])){
+            $this->telegram->sendMessage($userId,'Некорректный признак спойлера. Медиа не сохранено.');return;
         }
         $text = trim((string) ($message['text'] ?? ''));
         if (
@@ -1251,6 +1351,7 @@ final class PostedBot
                 $startMatch
             ) === 1
         ) {
+            if(isset($startMatch[1]))$this->trackTelegramSubscriptionReferral($userId,(string)$startMatch[1],$subscriptionNewUser);
             $this->clearState($userId);
             $this->showMainMenu($userId);
             return;
@@ -1296,6 +1397,7 @@ final class PostedBot
         if ($command === '/content') { $this->showContentPlanChannels($userId); return; }
         if ($command === '/templates') { $this->showTemplates($userId); return; }
         if ($command === '/settings') { $this->showSettings($userId); return; }
+        if ($command === '/pay') { $this->showTelegramSubscription($userId); return; }
         if ($command === '/catalog') { $this->showEmojiCatalogV2($userId); return; }
         if ($command === '/addemoji') {
             $this->setState($userId,'await_emoji_add');
@@ -1308,30 +1410,38 @@ final class PostedBot
             return;
         }
         if ($command === '/help') {
+            if ($this->telegramUiLanguage($userId) === 'en') {
+                $supportUsername = $this->serviceAdminUsername();
+                $text = PostedTelegramUi::englishHtml('help.body', ['support'=>$supportUsername !== '' ? '@'.$supportUsername : 'контакт владельца пока не указан']);
+                $newsUsername = $this->serviceNewsUsername();
+                if ($newsUsername !== '') $text .= "\n\n" . PostedTelegramUi::englishHtml('help.news', ['news'=>'@'.$newsUsername]);
+                $this->telegram->sendMessage($userId, $text, ['parse_mode'=>'HTML']);
+                return;
+            }
             $info = $this->customEmojiHtml('5258503720928288433', 'ℹ️');
             $check = $this->customEmojiHtml('5260726538302660868', '✅');
             $support = $this->serviceAdminLabel();
             $text = $info . " <b>ПОМОЩЬ</b>\n    \n"
-                . "Если у вас возникли вопросы по работе GitPosted или вы нашли ошибку, напишите в поддержку: " . $support . ".\n\n"
-                . "<b>Инструкции по разделам сервиса:</b>\n\n"
-                . $check . " Как подключить бота к каналу?\n"
-                . $check . " Как создать и опубликовать пост?\n"
-                . $check . " Работа с контент-планом\n"
-                . $check . " Замена ссылок\n"
-                . $check . " Изменение поста\n"
-                . $check . " Каталог эмодзи\n"
-                . $check . " Настройки канала\n"
-                . $check . " Расписание и часовой пояс\n"
-                . $check . " Обычные и рекламные посты\n"
-                . $check . " Настройки публикации, удаления и автоповтора\n"
-                . $check . " Папки каналов";
+                . "Если у вас возникли вопросы по работе сервиса или вы нашли ошибку, пишите нам в поддержку " . $support . ".";
+            $newsUsername = $this->serviceNewsUsername();
+            if ($newsUsername !== '') {
+                $text .= "\n\n@" . htmlspecialchars($newsUsername, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+                    . " - новостной канал сервиса, в котором мы рассказываем о всех новинках сервиса и выкладываем полезные материалы.";
+            }
+            $text .= "\n\n<b>Инструкции по разделам сервиса:</b>\n\n";
+            $helpRows=[];
+            foreach (PostedTelegramUi::helpLinks($this->serviceBaseUrl()) as $helpLink) {
+                $helpRows[]=$check . ' <a href="' . htmlspecialchars($helpLink['url'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '">'
+                    . htmlspecialchars($helpLink['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</a>';
+            }
+            $text .= implode("\n", $helpRows);
             $this->telegram->sendMessage($userId, $text, ['parse_mode' => 'HTML']);
             return;
         }
         if ($command === '/lang') {
             $this->telegram->sendMessage(
                 $userId,
-                $this->customEmojiHtml('5260512129240276089', '📚') . ' Выберите язык.',
+                $this->telegramUiText($userId, 'language.choose', $this->customEmojiHtml('5260512129240276089', '📚') . ' Выберите язык.'),
                 [
                     'parse_mode' => 'HTML',
                     'reply_markup' => ['inline_keyboard' => [[['text' => '🇷🇺 Русский', 'callback_data' => 'lang:set:ru']], [['text' => '🇬🇧 English', 'callback_data' => 'lang:set:en']]]],
@@ -1371,17 +1481,37 @@ final class PostedBot
             );
             return;
         }
+        if ($this->handleTelegramSubscriptionInput($userId,$message)) return;
         if ($this->handleTelegramPostLinkMessage($userId, $message)) return;
+        $menuText = PostedTelegramUi::mainButtonAction($text);
         $state = (string) ($user['state'] ?? '');
+        if($state==='collecting_media_group'&&in_array($menuText,['Создать пост','Изменить пост','Контент-план','Настройки','Шаблоны','Каталог эмодзи'],true)){
+            // A recognized reply-menu label navigates after the album. Preserve
+            // its draft/vector/receipts and never clear a newer input snapshot.
+            if($this->pdo->inTransaction()||!array_key_exists('state_data',$user))return;
+            $navigation=$this->pdo->prepare("UPDATE posted_users SET state=NULL,state_data=NULL WHERE telegram_id=? AND is_active=1 AND state='collecting_media_group' AND state_data <=> CAST(? AS JSON)");
+            $navigation->execute([$userId,$user['state_data']]);
+            if($navigation->rowCount()!==1)return;
+            $state='';
+        }
+        if($state==='await_post_content'&&in_array($menuText,['Создать пост','Изменить пост','Контент-план','Настройки','Шаблоны','Каталог эмодзи'],true)){
+            // The reply menu also navigates while awaiting the next post's content.
+            // Preserve every existing draft and let a newer input snapshot win.
+            if($this->pdo->inTransaction()||!array_key_exists('state_data',$user))return;
+            $navigation=$this->pdo->prepare("UPDATE posted_users SET state=NULL,state_data=NULL WHERE telegram_id=? AND is_active=1 AND state='await_post_content' AND state_data <=> CAST(? AS JSON)");
+            $navigation->execute([$userId,$user['state_data']]);
+            if($navigation->rowCount()!==1)return;
+            $state='';
+        }
         if ($state !== '') {
             $this->handleStateMessage($userId, $state, $this->stateData($user), $message);
             return;
         }
-        if ($text === (string) self::MAIN_KEYBOARD[0][1]['text']) {
+        if ($menuText === (string) self::MAIN_KEYBOARD[0][1]['text']) {
             $this->startEditPost($userId);
             return;
         }
-        match ($text) {
+        match ($menuText) {
             'Создать пост' => $this->showChannelPicker($userId, 'post_channel'),
             'Изменить пост' => $this->showContentPlanChannels($userId),
             'Контент-план' => $this->showContentPlanChannels($userId),
@@ -1405,11 +1535,40 @@ final class PostedBot
             $this->handlePublicInteractiveButton($callback, $data);
             return;
         }
+        if (!$this->telegramPolicyAllowOperator($userId, $callback)) return;
+        if($this->handleTelegramPublicButtonResume($callback))return;
+        if($this->handleTelegramPublicEditStatusCallback($callback))return;
+        if($this->handleTelegramCpDeleteConfirmation($callback))return;
         $this->upsertUser($from);
         $user = $this->user($userId);
         if (!$this->isKnownActiveUser($user)) {
             $this->answerCallback($callback, 'Доступ не выдан.');
             return;
+        }
+        if($this->handleTelegramTemplateMediaCallback($callback))return;
+        // Calendar read routes carry a CHANNEL ID; never treat it as an unrelated post ID in the album guard.
+        if(preg_match('/\Atop:(?:graph|month|slot|advertiser|custom):/D',$data)===1&&$this->handleTelegramTopCallback($callback))return;
+        if($this->handleTelegramAlbumPendingCallback($callback))return;
+        if($this->handleTelegramAlbumButtonCallback($callback))return;
+        if (str_starts_with($data, 'lang:set:')) {
+            $language = substr($data, strlen('lang:set:'));
+            if (!in_array($language, ['ru', 'en'], true)) {
+                $this->answerCallback($callback);
+                return;
+            }
+            PostedTelegramUi::saveLanguage($this->pdo, $userId, $language);
+            $this->telegramUiLanguageCache[$userId] = $language;
+            $this->answerCallback($callback);
+            $this->showMainMenu($userId,false);
+            return;
+        }
+        if(str_starts_with($data,'sub:')){
+            $this->answerCallback($callback);
+            $this->handleTelegramSubscriptionCallback($userId,$data,$this->callbackTarget($callback));
+            return;
+        }
+        if(str_starts_with($data,'mopt:')||str_starts_with($data,'mprice:')||str_starts_with($data,'draft:add_media:')){
+            if($this->handleTelegramMediaOptionsCallback($userId,$data,$this->callbackTarget($callback))){$this->answerCallback($callback);return;}
         }
         // Transfer buttons must validate their nonce before touching unrelated
         // work, including an album which arrived after an old confirmation.
@@ -1418,6 +1577,47 @@ final class PostedBot
             $this->handleTelegramAccountTransferCallback($userId, $data, $this->callbackTarget($callback));
             return;
         }
+        // Catalogue navigation and filters do not consume an unrelated draft/album input.
+        if (str_starts_with($data, 'post_option:')) {
+            $this->answerCallback($callback);
+            $this->handleTelegramPostOptionsCallback($userId,$data,$this->callbackTarget($callback));
+            return;
+        }
+        if (str_starts_with($data, 'preview_media:')) {
+            $this->answerCallback($callback);
+            $this->handleTelegramPreviewMediaCallback($userId, $data, $this->callbackTarget($callback));
+            return;
+        }
+        if (str_starts_with($data, 'mp:')) {
+            $this->answerCallback($callback);
+            $this->handleTelegramMultipostCallback($userId, $data, $this->callbackTarget($callback));
+            return;
+        }
+        if (str_starts_with($data, 'emoji_filter:')) {
+            $this->answerCallback($callback);
+            $this->handleTelegramEmojiFilterCallback($userId, $data, $this->callbackTarget($callback));
+            return;
+        }
+        if (str_starts_with($data, 'emoji:')) {
+            $this->answerCallback($callback);
+            $parts = explode(':', $data);
+            $this->showEmojiCatalogV2(
+                $userId,
+                (string) ($parts[1] ?? 'quality'),
+                max(1, (int) ($parts[2] ?? 1)),
+                $this->callbackTarget($callback),
+                (string) ($parts[3] ?? '') === 'more'
+            );
+            return;
+        }
+        if($this->handleTelegramAuthorityPauseCallback($callback))return;
+        if($this->handleTelegramTopCallback($callback))return;
+        if($this->handleTelegramTopQuotaCallback($callback))return;
+        if($this->handleTelegramDraftUrlCallback($callback))return;
+        if($this->handleTelegramDraftMoreCallback($callback))return;
+        if($this->handleTelegramDraftPanelCallback($callback))return;
+        if($this->handleTelegramPublishedAlbumCallback($callback))return;
+        if($this->handleTelegramPublishedSingleCallback($callback))return;
         if ((string) ($user['state'] ?? '') === 'collecting_media_group') {
             $this->clearState($userId);
         }
@@ -1433,11 +1633,6 @@ final class PostedBot
             if ($chatId && $messageId) { try { $this->telegram->call('deleteMessage', ['chat_id' => $chatId, 'message_id' => $messageId]); } catch (Throwable) {} }
             return;
         }
-        if (str_starts_with($data, 'lang:set:')) {
-            $this->answerCallback($callback, $data === 'lang:set:en' ? 'English' : 'Русский');
-            $this->showMainMenu($userId);
-            return;
-        }
         if ($data === 'main') {
             $this->clearState($userId);
             $this->showMainMenu($userId);
@@ -1446,17 +1641,6 @@ final class PostedBot
         if ($data === 'tpl_root') {
             $this->clearState($userId);
             $this->showTemplates($userId);
-            return;
-        }
-        if (str_starts_with($data, 'emoji:')) {
-            $parts = explode(':', $data);
-            $this->showEmojiCatalogV2(
-                $userId,
-                (string) ($parts[1] ?? 'quality'),
-                max(1, (int) ($parts[2] ?? 1)),
-                $target,
-                (string) ($parts[3] ?? '') === 'more'
-            );
             return;
         }
         if (str_starts_with($data, 'series:')) {
@@ -1812,14 +1996,16 @@ final class PostedBot
         $subject = (array) ($new['user'] ?? []);
         $subjectId = (int) ($subject['id'] ?? 0);
         $botId = $this->telegramBotId();
-        if ($subjectId <= 0 || $botId <= 0 || $subjectId !== $botId) {
+        if (!is_int($subject['id']??null)||($subject['is_bot']??null)!==true||$subjectId <= 0 || $botId <= 0 || $subjectId !== $botId) {
             error_log('GitPosted ignored my_chat_member update with an invalid bot identity.');
             return;
         }
         $status = (string) ($new['status'] ?? '');
+        if(!in_array($status,['creator','administrator','member','restricted','left','kicked'],true))return;
+        if($status==='administrator'&&!is_bool($new['can_post_messages']??null))return;
         $from = (array) ($event['from'] ?? []);
         $fromId = (int) ($from['id'] ?? 0);
-        if ($fromId > 0) {
+        if ($fromId > 0 && $this->telegramPolicyOperatorAllowed($fromId)) {
             $this->upsertUser($from);
         }
         $previousChannel = $this->channelByChatId((string)($chat['id']??''));
@@ -1853,7 +2039,24 @@ final class PostedBot
             'can_delete' => !empty($new['can_delete_messages']) ? 1 : 0,
             'added_by' => null,
         ];
-        $this->pdo->prepare($channelSql)->execute($channelParameters);
+        $ownsTransaction = !$this->pdo->inTransaction();
+        if ($ownsTransaction) PostedTelegramRootedAccess::begin($this->pdo,$this->config,true);
+        try {
+            $this->pdo->prepare($channelSql)->execute($channelParameters);
+            if (in_array($status, ['left', 'kicked'], true)) {
+                $removedChannel = $this->channelByChatId((string) ($chat['id'] ?? ''));
+                if (is_array($removedChannel)) $this->clearTelegramChannelTransferReceipt((int) $removedChannel['id']);
+            }
+            $s=$this->pdo->prepare('SELECT * FROM posted_channels WHERE chat_id=? LIMIT 1 FOR UPDATE');$s->execute([(string)$chat['id']]);$current=$s->fetch();
+            if(is_array($current)&&(int)($current['added_by']??0)>0){
+                if($status!=='administrator'||($new['can_post_messages']??null)!==true)PostedTelegramAuthorityPause::pauseLocked($this->pdo,$current,in_array($status,['left','kicked'],true)?'bot_removed':'bot_rights_lost');
+                elseif(PostedTelegramAuthorityPause::blocked($this->pdo,$current,true))$this->pdo->prepare('UPDATE posted_channels SET is_active=0 WHERE id=?')->execute([(int)$current['id']]);
+            }
+            if ($ownsTransaction) PostedTelegramRootedAccess::commit($this->pdo);
+        } catch (Throwable $exception) {
+            if ($ownsTransaction && $this->pdo->inTransaction()) PostedTelegramRootedAccess::rollback($this->pdo);
+            throw $exception;
+        }
         if (
             is_array($previousChannel)
             && !empty($previousChannel['bot_can_post'])
@@ -1865,7 +2068,7 @@ final class PostedBot
                     (int)$previousChannel['added_by'],
                     'Публикации в канал «'.(string)($previousChannel['title']??'Канал')
                     .'» приостановлены: у бота больше нет права публиковать сообщения. '
-                    .'Запланированные посты сохранятся и продолжат отправляться после возврата права.'
+                    .'Посты, даты и повторы сохранены. После возврата права требуется отдельная проверка и подтверждение возобновления.'
                 );
             } catch (Throwable $exception) {
                 error_log('GitPosted could not notify about lost Telegram publish rights: '.$exception->getMessage());
@@ -1883,7 +2086,7 @@ final class PostedBot
         $new = (array) ($event['new_chat_member'] ?? []);
         $member = (array) ($new['user'] ?? []);
         $memberId = (int) ($member['id'] ?? 0);
-        if ($chatId === '' || $memberId <= 0) {
+        if ($chatId === '' || !is_int($member['id']??null) || $memberId <= 0 || ($member['is_bot']??null)!==false) {
             return;
         }
         $channel = $this->channelByChatId($chatId);
@@ -1891,11 +2094,15 @@ final class PostedBot
             return;
         }
         $status = (string) ($new['status'] ?? '');
+        if(!in_array($status,['creator','administrator','member','restricted','left','kicked'],true))return;
         $isAdministrator = in_array($status, ['creator', 'administrator'], true);
         $this->telegramChannelAdminCache[$this->telegramChannelAdminCacheKey($chatId, $memberId)] = $isAdministrator;
         if ($isAdministrator) {
             return;
         }
+        // A confirmed in-app transfer delegates this binding independently of
+        // the recipient's human Telegram role. Bot authority is checked at use.
+        if ($this->telegramTransferredChannelOwnerReceipt($channel) !== null) return;
         if (!$this->freezeTelegramChannelOwnership((int) $channel['id'], $memberId)) {
             return;
         }
@@ -1904,7 +2111,7 @@ final class PostedBot
                 $memberId,
                 'Доступ к каналу «' . (string) ($channel['title'] ?? $chatId)
                 . '» остановлен: вы больше не являетесь его владельцем или администратором в Telegram. '
-                . 'Запланированные публикации отменены. Действующий администратор может подключить канал заново.'
+                . 'Посты, даты и повторы сохранены. После возврата прав откройте проверку сохранённых публикаций и подтвердите возобновление.'
             );
         } catch (Throwable $exception) {
             error_log('GitPosted could not notify a former Telegram channel owner: ' . $exception->getMessage());
@@ -1913,6 +2120,13 @@ final class PostedBot
 
     private function handleStateMessage(int $userId, string $state, array $data, array $message): void
     {
+        if($this->handleTelegramPublishedSingleInput($userId,$state,$data,$message))return;
+        if($this->handleTelegramAlbumButtonInput($userId,$state,$data))return;
+        if($state==='await_paid_media_price'){$this->handleTelegramPaidMediaPriceInput($userId,$data,$message);return;}
+        if ($state === 'await_draft_preview_media') {
+            $this->handleTelegramDraftPreviewMediaInput($userId, $data, $message);
+            return;
+        }
         if ($this->handleTelegramAccountTransferInput($userId, $state, $data, $message)) return;
         if ($state === 'await_publication_plan') {
             $this->handlePublicationPlanInput($userId, $data, trim((string)($message['text'] ?? '')));
@@ -1950,8 +2164,9 @@ final class PostedBot
             $channelId = (int) ($data['channel_id'] ?? 0);
             $scope = (string) ($data['scope'] ?? 'post');
             if (!$this->can($userId,$channelId,'manage_admins')) { $this->clearState($userId); return; }
-            $content = $this->contentFromMessage($message);
+            $content = $this->telegramTextInputContent($message);
             $value = (string) ($content['text'] ?? '');
+            if(trim($value)===''){$this->telegram->sendMessage($userId,'Отправьте текст для автоподписи.');return;}
             $control = mb_strtolower(trim($value));
             if ($control === '-' || $control === 'нет') {
                 $value = '';
@@ -1985,7 +2200,8 @@ final class PostedBot
         if ($state === 'await_channel_buttons') {
             $channelId = (int) ($data['channel_id'] ?? 0);
             if (!$this->can($userId,$channelId,'manage_admins')) { $this->clearState($userId); return; }
-            $buttons = $this->parseButtons(trim((string) ($message['text'] ?? '')));
+            $buttons = $this->parseButtonsInput($message);
+            if($buttons===null){$this->telegram->sendMessage($userId,$this->buttonsHelpText());return;}
             $this->replaceChannelDefaultButtons($userId, $channelId, 'url', $buttons);
             $this->clearState($userId);
             $this->showChannelPostSettings($userId,$channelId);
@@ -1994,7 +2210,8 @@ final class PostedBot
         if ($state === 'await_channel_reactions') {
             $channelId = (int) ($data['channel_id'] ?? 0);
             if (!$this->can($userId,$channelId,'manage_admins')) { $this->clearState($userId); return; }
-            $buttons = $this->parseReactionButtons(0, trim((string) ($message['text'] ?? '')));
+            $buttons = $this->parseReactionButtonsInput(0,$message);
+            if($buttons===null){$this->telegram->sendMessage($userId,'Отправьте боту список реакций, разделяя их символом «/».');return;}
             $this->replaceChannelDefaultButtons($userId, $channelId, 'reaction', $buttons);
             $this->clearState($userId);
             $this->showChannelPostSettings($userId,$channelId);
@@ -2088,7 +2305,9 @@ final class PostedBot
             $postId = (int) ($data['post_id'] ?? 0);
             $groupId = (string) ($data['media_group_id'] ?? '');
             if ($postId > 0 && $groupId !== '' && hash_equals($groupId, (string) ($message['media_group_id'] ?? ''))) {
+                $collected=$this->hasTelegramAlbumCollection($userId,$postId,$message);
                 $updated = $this->appendDraftMediaGroupItem($userId, $postId, $message);
+                if($collected)return; // A complete preview is emitted once after the quiet window.
                 if (!$updated) $this->clearState($userId);
                 $this->showDraftActions($userId, $postId, $updated ? 'Альбом обновлён.' : 'Альбом не изменён. Для редактирования репоста сначала выберите копию.');
                 return;
@@ -2161,7 +2380,8 @@ final class PostedBot
                 $this->telegram->sendMessage($userId, 'Пост уже недоступен для изменения или у вас больше нет прав.');
                 return;
             }
-            $buttons = $this->parseButtons($text);
+            $buttons = $this->parseButtonsInput($message);
+            if($buttons===null){$this->telegram->sendMessage($userId,$this->buttonsHelpText());return;}
             if(!$this->stageEditablePostChanges($userId,$postId,['buttons_json'=>$buttons])){
                 return;
             }
@@ -2179,16 +2399,19 @@ final class PostedBot
         }
         if ($state === 'await_reactions') {
             $postId = (int) ($data['post_id'] ?? 0);
-            $buttons = $this->parseReactionButtons($postId, $text);
+            $buttons = $this->parseReactionButtonsInput($postId,$message);
+            if($buttons===null){$this->telegram->sendMessage($userId,'Отправьте боту список реакций, разделяя их символом «/».');return;}
             $updated = $this->withTelegramManagedPostLock(
                 $userId,
                 $postId,
                 ['draft'],
                 function (array $lockedPost) use ($postId, $buttons, $userId, $state, $data): bool|string {
+                    if(!$this->telegramPostInlineButtonsAllowed($lockedPost))return 'album';
                     if ($this->isNativeRepost($lockedPost)) {
                         $this->clearTelegramRepostInputIfCurrent($userId, $state, $data);
                         return 'native';
                     }
+                    $buttons=PostedTelegramButtonUi::replaceTypeRows($this->decodeJson((string)($lockedPost['buttons_json']??'[]')),$buttons,'reaction');
                     $this->pdo->prepare(
                         "UPDATE posted_posts SET buttons_json=:buttons
                          WHERE id=:id AND status='draft'"
@@ -2196,6 +2419,7 @@ final class PostedBot
                     return true;
                 }
             );
+            if($updated==='album'){$this->telegram->sendMessage($userId,'Кнопки недоступны для альбомов.');return;}
             if ($updated !== true) {
                 if ($updated !== 'native') $this->clearState($userId);
                 $this->telegram->sendMessage($userId, 'Черновик уже недоступен.');
@@ -2250,6 +2474,7 @@ final class PostedBot
                 $postId,
                 ['draft'],
                 function (array $post) use ($postId, $label, $hidden, $style, $userId, $state, $data): bool|string {
+                    if(!$this->telegramPostInlineButtonsAllowed($post))return 'album';
                     if ($this->isNativeRepost($post)) {
                         $this->clearTelegramRepostInputIfCurrent($userId, $state, $data);
                         return 'native';
@@ -2277,6 +2502,7 @@ final class PostedBot
                     ];
                     if(in_array($style,['danger','success','primary'],true))$button['style']=$style;
                     $buttons[] = [$button];
+                    $buttons=PostedTelegramButtonUi::orderRows($buttons);
                     $this->pdo->prepare(
                         "UPDATE posted_posts SET buttons_json=:buttons
                          WHERE id=:id AND status='draft'"
@@ -2284,6 +2510,7 @@ final class PostedBot
                     return true;
                 }
             );
+            if($updated==='album'){$this->telegram->sendMessage($userId,'Кнопки недоступны для альбомов.');return;}
             if ($updated !== true) {
                 if ($updated !== 'native') $this->clearState($userId);
                 $this->telegram->sendMessage($userId, 'Черновик уже недоступен.');
@@ -2326,16 +2553,19 @@ final class PostedBot
         }
         if ($state === 'await_buttons') {
             $postId = (int) ($data['post_id'] ?? 0);
-            $buttons = $this->parseButtons($text);
+            $buttons = $this->parseButtonsInput($message);
+            if($buttons===null){$this->showTelegramDraftInvalidUrlInput($userId,$postId);return;}
             $updated = $this->withTelegramManagedPostLock(
                 $userId,
                 $postId,
                 ['draft'],
                 function (array $lockedPost) use ($postId, $buttons, $userId, $state, $data): bool|string {
+                    if(!$this->telegramPostInlineButtonsAllowed($lockedPost))return 'album';
                     if ($this->isNativeRepost($lockedPost)) {
                         $this->clearTelegramRepostInputIfCurrent($userId, $state, $data);
                         return 'native';
                     }
+                    if($buttons!==[])$buttons=PostedTelegramButtonUi::replaceTypeRows($this->decodeJson((string)($lockedPost['buttons_json']??'[]')),$buttons,'url');
                     $this->pdo->prepare(
                         "UPDATE posted_posts SET buttons_json=:buttons
                          WHERE id=:id AND status='draft'"
@@ -2349,6 +2579,7 @@ final class PostedBot
                     return true;
                 }
             );
+            if($updated==='album'){$this->telegram->sendMessage($userId,'Кнопки недоступны для альбомов.');return;}
             if ($updated !== true) {
                 if ($updated !== 'native') $this->clearState($userId);
                 $this->telegram->sendMessage($userId, 'Черновик уже недоступен.');
@@ -2392,7 +2623,8 @@ final class PostedBot
                 $userId,
                 $postId,
                 ['draft','scheduled','failed'],
-                function () use ($postId, $scheduledAt): bool {
+                function (array $lockedPost,array $lockedChannel) use ($postId, $scheduledAt): bool {
+                    PostedTelegramTopHold::assertProjectedScheduleLocked($this->pdo,$lockedChannel,$lockedPost,$scheduledAt);
                     $this->pdo->prepare(
                         "UPDATE posted_posts
                          SET status='scheduled',scheduled_at=:scheduled_at,error_text=NULL
@@ -2400,7 +2632,7 @@ final class PostedBot
                     )->execute(['scheduled_at' => $scheduledAt, 'id' => $postId]);
                     return true;
                 },
-                true
+                true,false,false,true
             );
             if ($updated !== true) {
                 $this->clearState($userId);
@@ -2438,7 +2670,16 @@ final class PostedBot
                 return;
             }
             $this->clearState($userId);
-            $this->showDraftActions($userId, $postId, $minutes > 0 ? 'Автоудаление включено.' : 'Автоудаление выключено.');
+            $timerNotice=$minutes<=0?'Автоудаление выключено.':($minutes>self::TELEGRAM_MAX_AUTO_DELETE_MINUTES
+                ?'Сохранён срок ручного удаления: '.$this->telegramDeleteTimerLabel($minutes).'. Автоудаление после 48 часов недоступно.'
+                :'Автоудаление включено: '.$this->telegramDeleteTimerLabel($minutes).'.');
+            if($minutes>self::TELEGRAM_MAX_AUTO_DELETE_MINUTES){
+                // Single-message previews keep the publication text intact;
+                // their separate acknowledgement cannot live in prefixText.
+                $this->telegram->sendMessage($userId,$timerNotice);
+                $timerNotice='';
+            }
+            $this->showDraftActions($userId, $postId, $timerNotice);
             return;
         }
         if ($state === 'await_admin_id') {
@@ -2507,8 +2748,22 @@ final class PostedBot
         }
     }
 
+    /** Text-only workflows never decode or adopt an incoming Native payload. */
+    private function telegramTextInputContent(array $message): array
+    {
+        foreach(PostedTelegramNativeContent::KINDS as$kind)if(array_key_exists($kind,$message))return['text'=>'','text_entities'=>[]];
+        if(array_key_exists('paid_media',$message))return['text'=>'','text_entities'=>[]];
+        $usesText=array_key_exists('text',$message);$text=$usesText?($message['text']??''):($message['caption']??'');
+        if(!is_string($text))return['text'=>'','text_entities'=>[]];
+        return['text'=>$text,'text_entities'=>$this->normalizeTelegramEntities($text,(array)($usesText?($message['entities']??[]):($message['caption_entities']??[])))];
+    }
+
     private function contentFromMessage(array $message): array
     {
+        $native=PostedTelegramNativeContent::fromMessage($message);
+        if($native!==null){$p=$native['payload'];return['text'=>'','text_entities'=>[],'media_spoiler'=>false,'media_type'=>$native['kind'],'media_file_id'=>$p['file_id']??null,'media'=>isset($p['file_id'])?[['type'=>$native['kind'],'file_id'=>$p['file_id'],'file_unique_id'=>$p['file_unique_id'],'media_group_id'=>null]]:[],'native_content'=>$native];}
+        if(array_key_exists('paid_media',$message))throw new InvalidArgumentException('Копирование внешнего платного медиа пока недоступно. Подпись не заменяет платное содержимое.');
+        if(array_key_exists('has_media_spoiler',$message)&&!is_bool($message['has_media_spoiler']))throw new InvalidArgumentException('Некорректный признак спойлера.');
         $usesText = array_key_exists('text', $message);
         $text = (string) ($usesText ? ($message['text'] ?? '') : ($message['caption'] ?? ''));
         $entities = $this->normalizeTelegramEntities(
@@ -2548,6 +2803,7 @@ final class PostedBot
         return [
             'text' => $text,
             'text_entities' => $entities,
+            'media_spoiler'=>($message['has_media_spoiler']??false)===true&&in_array($mediaType,['photo','video','animation'],true),
             'media_type' => $mediaType,
             'media_file_id' => $mediaFileId,
             'media' => $mediaFileId === null ? [] : [[
@@ -2567,7 +2823,7 @@ final class PostedBot
             if (!is_array($item)) continue;
             $type = (string) ($item['type'] ?? '');
             $fileId = trim((string) ($item['file_id'] ?? ''));
-            if (!in_array($type, ['photo', 'video', 'animation', 'document', 'audio', 'voice'], true) || $fileId === '') continue;
+            if (!in_array($type, ['photo', 'video', 'animation', 'document', 'audio', 'voice', 'video_note', 'sticker'], true) || $fileId === '') continue;
             $media[] = [
                 'type' => $type,
                 'file_id' => $fileId,
@@ -2593,6 +2849,7 @@ final class PostedBot
 
     private function appendDraftMediaGroupItem(int $userId, int $postId, array $message): bool
     {
+        if($this->hasTelegramAlbumCollection($userId,$postId,$message))return$this->appendTelegramAlbumItem($userId,$postId,$message);
         $content = $this->contentFromMessage($message);
         if ($content['media'] === []) {
             return false;
@@ -2604,6 +2861,7 @@ final class PostedBot
                 ['draft'],
                 function (array $lockedPost) use ($content, $postId): bool {
                     if ($this->isNativeRepost($lockedPost)) return false;
+                    if(PostedTelegramCaptionVector::load($this->pdo,$lockedPost)!==null)return false; // Only authenticated MID-bound collector ingress may extend this vector.
                     $media = $this->postMedia($lockedPost);
                     $item = $content['media'][0];
                     foreach ($media as $existing) {
@@ -2615,6 +2873,8 @@ final class PostedBot
                         return true;
                     }
                     $media[] = $item;
+                    if(!$this->telegramMediaOptionsCompatible($lockedPost,$media)||!$this->telegramInboundSpoilerLocked($lockedPost,$content))return false;
+                    if(PostedTelegramSourceSpoiler::mediaFingerprint($lockedPost)!==PostedTelegramSourceSpoiler::mediaFingerprint(array_replace($lockedPost,['media_json'=>$this->encodeJson($media)])))PostedTelegramSourceSpoiler::detachLocked($this->pdo,$lockedPost);
                     $text = (string) $content['text'];
                     $sql = "UPDATE posted_posts
                             SET media_json=:media_json,
@@ -2642,9 +2902,9 @@ final class PostedBot
     private function startEditPost(int $userId): void
     {
         $this->setState($userId, 'await_edit_forward', []);
-        $this->telegram->sendMessage($userId, $this->customEmojiHtml('5258331647358540449', '✍️') . ' <b>ИЗМЕНЕНИЕ ПОСТА</b>' . "\n\n" . 'Перешлите пост из вашего канала, который хотите изменить.', [
+        $this->telegram->sendMessage($userId, $this->telegramUiText($userId, 'edit.body', $this->customEmojiHtml('5258331647358540449', '✍️') . ' <b>ИЗМЕНЕНИЕ ПОСТА</b>' . "\n\n" . 'Перешлите пост из вашего канала, который хотите изменить.'), [
             'parse_mode' => 'HTML',
-            'reply_markup' => ['inline_keyboard' => [[['text' => '← Отменить', 'callback_data' => 'main']]]],
+            'reply_markup' => ['inline_keyboard' => [[['text' => $this->telegramUiText($userId, 'button.cancel', '← Отменить'), 'callback_data' => 'main']]]],
         ]);
     }
 
@@ -2691,7 +2951,7 @@ final class PostedBot
         if (($origin['type'] ?? '') === 'user' && !empty($origin['sender_user']) && is_array($origin['sender_user'])) {
             $sender = (array) $origin['sender_user'];
             $id = (int) ($sender['id'] ?? 0);
-            if ($id > 0) {
+            if ($id > 0 && $this->telegramPolicyOperatorAllowed($id)) {
                 $this->upsertUser($sender);
                 return $id;
             }
@@ -2700,7 +2960,7 @@ final class PostedBot
         if (!empty($message['forward_from']) && is_array($message['forward_from'])) {
             $sender = (array) $message['forward_from'];
             $id = (int) ($sender['id'] ?? 0);
-            if ($id > 0) {
+            if ($id > 0 && $this->telegramPolicyOperatorAllowed($id)) {
                 $this->upsertUser($sender);
                 return $id;
             }
@@ -2728,13 +2988,12 @@ final class PostedBot
             $this->telegram->sendMessage($userId, 'Нет доступа на изменение постов в этом канале.');
             return;
         }
-        $content = $this->contentFromMessage($message);
         try {
             [$postId, $deleteOnCancel] = $this->withTelegramChannelCapabilityLock(
                 $userId,
                 (int) $channel['id'],
                 'manage_posts',
-                function () use ($channel, $origin, $content, $userId): array {
+                function () use ($channel, $origin, $message, $userId): array {
                     $existingPostId = $this->postIdByChannelMessage(
                         (int) $channel['id'],
                         (int) $origin['message_id']
@@ -2742,6 +3001,7 @@ final class PostedBot
                     if ($existingPostId > 0) {
                         return [$existingPostId, false];
                     }
+                    $content=$this->contentFromMessage($message);
                     $stmt = $this->pdo->prepare(
                         "INSERT INTO posted_posts
                             (channel_id, author_id, text, text_entities_json, media_type, media_file_id, media_json, status, external_chat_id, external_message_id, original_media_type)
@@ -2773,12 +3033,12 @@ final class PostedBot
             );
         } catch (Throwable $exception) {
             $this->clearState($userId);
-            $this->telegram->sendMessage($userId, 'Нет доступа на изменение постов в этом канале.');
+            $this->telegram->sendMessage($userId, $exception instanceof InvalidArgumentException&&array_key_exists('paid_media',$message)?$exception->getMessage():'Нет доступа на изменение постов в этом канале.');
             return;
         }
         $this->clearState($userId);
         $editablePost=$this->post($postId);
-        if(!is_array($editablePost)||!$this->isSingleMessageEditableTelegramPost($editablePost)){
+        if(!is_array($editablePost)||(!$this->isSingleMessageEditableTelegramPost($editablePost)&&!$this->telegramPublishedAlbumEditable($editablePost))){
             $this->telegram->sendMessage(
                 $userId,
                 'Составные публикации и альбомы нельзя безопасно изменить через этот редактор. Изменения не применялись.'
@@ -2800,9 +3060,11 @@ final class PostedBot
                 $postId,
                 ['sent'],
                 function (array $lockedPost) use ($userId, $postId, $deleteOnCancel): bool {
-                    if(!$this->isSingleMessageEditableTelegramPost($lockedPost)){
+                    if(!$this->isSingleMessageEditableTelegramPost($lockedPost)&&!$this->telegramPublishedAlbumEditable($lockedPost)){
                         return false;
                     }
+                    PostedTelegramPublicButtonLayout::assertNotComponents($lockedPost);
+                    PostedTelegramPublicButtonEdit::assertIdleLocked($this->pdo,$postId);
                     $snapshot=$this->editablePostSnapshot($lockedPost);
                     $document=[
                         'version'=>2,
@@ -2822,6 +3084,9 @@ final class PostedBot
                         'snapshot'=>$this->encodeJson($document),
                         'delete_on_cancel'=>$deleteOnCancel?1:0,
                     ]);
+                    $channel=$this->channel((int)$lockedPost['channel_id']);
+                    if(!is_array($channel))throw new RuntimeException('album_edit_channel_missing');
+                    $this->telegramStartAlbumEditLocked($userId,$lockedPost,$channel);
                     return true;
                 },
                 false,
@@ -2841,6 +3106,7 @@ final class PostedBot
                 $postId,
                 ['sent'],
                 function (array $post) use ($userId, $postId): bool {
+                    PostedTelegramPublicButtonEdit::assertIdleLocked($this->pdo,$postId);
                     $sessionStmt=$this->pdo->prepare(
                         'SELECT * FROM posted_edit_sessions
                          WHERE user_id=:user AND post_id=:post
@@ -2853,6 +3119,7 @@ final class PostedBot
                         return true;
                     }
 
+                    if($this->telegramAlbumEditCandidate($post)&&$this->telegramAlbumEditBusy($postId,true))throw new RuntimeException('album_edit_operation_pending');
                     $deleteImportedPost=false;
                     if(!empty($session['delete_on_cancel'])){
                         $document=$this->editSessionDocument($session,$post);
@@ -2869,6 +3136,7 @@ final class PostedBot
                     $this->pdo->prepare(
                         'DELETE FROM posted_edit_sessions WHERE user_id=:user AND post_id=:post'
                     )->execute(['user'=>$userId,'post'=>$postId]);
+                    PostedTelegramPublishedAlbumEditor::removeStageLocked($this->pdo,$userId,$postId);
                     if($deleteImportedPost){
                         $this->pdo->prepare('DELETE FROM posted_posts WHERE id=:post')->execute(['post'=>$postId]);
                     }
@@ -2932,18 +3200,20 @@ final class PostedBot
             &&is_array($stored['base']??null)
             &&is_array($stored['draft']??null)
         ){
-            return [
+            $document=[
                 'version'=>2,
                 'base'=>$this->editablePostSnapshot((array)$stored['base']),
                 'draft'=>$this->editablePostSnapshot((array)$stored['draft']),
             ];
+            if(array_key_exists('caption_placement',$stored))$document['caption_placement']=$stored['caption_placement'];
+            return PostedTelegramCaptionPlacement::editDocument($this->pdo,$post,$document);
         }
 
         // Lazy migration for sessions created by the legacy editor, which wrote
         // changes directly to posted_posts. Treat the current row as the new base
         // so cancelling this session can never restore stale data over another edit.
         $snapshot=$this->editablePostSnapshot($post);
-        return ['version'=>2,'base'=>$snapshot,'draft'=>$snapshot];
+        return PostedTelegramCaptionPlacement::editDocument($this->pdo,$post,['version'=>2,'base'=>$snapshot,'draft'=>$snapshot]);
     }
 
     private function editSessionPost(int $userId,int $postId):?array
@@ -2957,7 +3227,7 @@ final class PostedBot
         $session=$sessionStmt->fetch();
         if(!is_array($session))return null;
         $document=$this->editSessionDocument($session,$post);
-        return $this->postWithEditableSnapshot($post,$document['draft']);
+        return PostedTelegramCaptionPlacement::editPost($this->postWithEditableSnapshot($post,$document['draft']),$document);
     }
 
     private function postWithEditableSnapshot(array $post,array $snapshot):array
@@ -2985,14 +3255,23 @@ final class PostedBot
         return count($this->postMessageIds($post))===1;
     }
 
-    private function stageEditablePostChanges(int $userId,int $postId,array $changes):bool
+    private function stageEditablePostChanges(int $userId,int $postId,array $changes,?bool $captionAboveReplacement=null):bool
     {
         try {
             $updated=$this->withTelegramManagedPostLock(
                 $userId,
                 $postId,
                 ['sent'],
-                function (array $lockedPost) use ($userId, $postId, $changes): bool {
+                function (array $lockedPost,array $lockedChannel) use ($userId, $postId, $changes,$captionAboveReplacement): bool|string {
+                    PostedTelegramPublicButtonEdit::assertIdleLocked($this->pdo,$postId);
+                    if(array_key_exists('buttons_json',$changes)&&!$this->telegramPostInlineButtonsAllowed($lockedPost))return 'album';
+                    if($this->telegramStageAlbumEditChangesLocked($userId,$lockedPost,$lockedChannel,$changes))return true;
+                    $sourceSpoiler=PostedTelegramSourceSpoiler::freeze($this->pdo,$lockedPost);
+                    if($sourceSpoiler!==null&&$sourceSpoiler['mode']==='native'&&($sourceSpoiler['state']==='unknown'||$sourceSpoiler['media_spoiler']===true)&&array_diff(array_keys($changes),['pin_after_publish'])!==[])throw new InvalidArgumentException('Состояние спойлера этого источника требует сохранения. Для изменения создайте дубликат и явно выберите копию.');
+                    if($this->telegramPostOptions($lockedPost)['paid_media_stars']!==null
+                        &&array_intersect(array_keys($changes),['media_type','media_file_id','media_json'])!==[]){
+                        throw new InvalidArgumentException('Медиа опубликованного платного поста нельзя заменять обычным медиа. Создайте отдельный черновик.');
+                    }
                     $sessionStmt=$this->pdo->prepare(
                         'SELECT * FROM posted_edit_sessions
                          WHERE user_id=:user AND post_id=:post
@@ -3006,6 +3285,8 @@ final class PostedBot
                     }
                     $document=$this->editSessionDocument($session,$lockedPost);
                     $document['draft']=$this->editablePostSnapshot(array_replace($document['draft'],$changes));
+                    if($captionAboveReplacement!==null)$document=PostedTelegramCaptionPlacement::replaceEdit($document,$captionAboveReplacement);
+                    PostedTelegramCaptionPlacement::editPost($this->postWithEditableSnapshot($lockedPost,$document['draft']),$document);
                     $this->pdo->prepare(
                         'UPDATE posted_edit_sessions SET snapshot_json=:snapshot
                          WHERE user_id=:user AND post_id=:post'
@@ -3019,6 +3300,7 @@ final class PostedBot
                 false,
                 true
             );
+            if($updated==='album'){$this->telegram->sendMessage($userId,'Кнопки недоступны для альбомов.');return false;}
             if($updated===true)return true;
             $this->clearState($userId);
             $this->telegram->sendMessage($userId,'Доступ к редактированию этого канала отозван.');
@@ -3026,21 +3308,26 @@ final class PostedBot
         } catch (Throwable $exception) {
             $this->clearState($userId);
             error_log('GitPosted edit staging failed: '.$exception->getMessage());
-            $this->telegram->sendMessage($userId,'Сессия редактирования устарела. Откройте пост заново.');
+            $this->telegram->sendMessage($userId,$exception instanceof InvalidArgumentException&&str_starts_with($exception->getMessage(),'Состояние спойлера этого источника')?$exception->getMessage():'Сессия редактирования устарела. Откройте пост заново.');
             return false;
         }
     }
 
     private function updateDraftText(int $userId, int $postId, array $message): void
     {
-        $content = $this->contentFromMessage($message);
+        $nativePost=$this->post($postId);if(is_array($nativePost)&&PostedTelegramNativeContent::isKind($nativePost['media_type']??null)){$this->telegram->sendMessage($userId,'Этот вид содержимого нельзя заменить описанием или обычным медиа. Исходный пост сохранён.');return;}
+        $content = $this->telegramTextInputContent($message);
+        if(isset($content['native_content'])){$this->telegram->sendMessage($userId,'Создайте новый пост с этим видом содержимого. Исходный пост сохранён.');return;}
         $text = (string) $content['text'];
-        $updated = $this->withTelegramManagedPostLock(
+        if($text===''){$this->telegram->sendMessage($userId,'Отправьте новый текст поста.');return;}
+        try{$updated = $this->withTelegramManagedPostLock(
             $userId,
             $postId,
             ['draft'],
             function (array $lockedPost) use ($postId, $text, $content): bool {
+                if(PostedTelegramNativeContent::isKind($lockedPost['media_type']??null))throw new RuntimeException('native_content_mutation_denied');
                 if ($this->isNativeRepost($lockedPost)) return false;
+                if($this->postMedia($lockedPost)!==[]&&mb_strlen($text,'UTF-8')>self::PHOTO_CAPTION_LIMIT)throw new LengthException('draft_caption_too_long');
                 $this->pdo->prepare(
                     "UPDATE posted_posts
                      SET text=:text,text_entities_json=:text_entities_json,
@@ -3056,7 +3343,7 @@ final class PostedBot
                 ]);
                 return true;
             }
-        );
+        );}catch(LengthException $error){if($error->getMessage()!=='draft_caption_too_long')throw$error;$this->telegram->sendMessage($userId,'❌ Нельзя добавить описание длиннее 1024 символов. Чтобы создать длинное описание, отправьте пост заново сразу с готовым описанием.',['entities'=>[['type'=>'custom_emoji','offset'=>0,'length'=>1,'custom_emoji_id'=>'5260342697075416641']]]);return;}
         if ($updated !== true) {
             $this->clearState($userId);
             $this->telegram->sendMessage($userId, 'Черновик недоступен для редактирования. Для репоста сначала выберите «Сделать копией».');
@@ -3068,18 +3355,28 @@ final class PostedBot
 
     private function updateDraftMedia(int $userId, int $postId, array $message): void
     {
-        $content = $this->contentFromMessage($message);
+        $nativePost=$this->post($postId);if(is_array($nativePost)&&PostedTelegramNativeContent::isKind($nativePost['media_type']??null)){$this->telegram->sendMessage($userId,'Этот вид содержимого нельзя заменить описанием или обычным медиа. Исходный пост сохранён.');return;}
+        try{$content = $this->contentFromMessage($message);}catch(InvalidArgumentException){$this->telegram->sendMessage($userId,'Отправьте поддерживаемое медиа. Исходные данные и текущий ввод сохранены.');return;}
+        if(isset($content['native_content'])){$this->telegram->sendMessage($userId,'Создайте новый пост с этим видом содержимого. Исходный пост сохранён.');return;}
         if ($content['media_file_id'] === null) {
             $this->telegram->sendMessage($userId, 'Отправьте фото, видео, анимацию, документ, аудио или голосовое сообщение.');
             return;
         }
+        try{$captionAbove=PostedTelegramCaptionPlacement::input($message,$content);}catch(InvalidArgumentException$e){$this->telegram->sendMessage($userId,$e->getMessage());return;}
         $replaceText = array_key_exists('caption',$message) || array_key_exists('text',$message);
         $updated = $this->withTelegramManagedPostLock(
             $userId,
             $postId,
             ['draft'],
-            function (array $lockedPost) use ($postId, $content, $replaceText): bool {
+            function (array $lockedPost) use ($postId, $content, $replaceText,$userId,$message,$captionAbove): bool {
+                if(PostedTelegramNativeContent::isKind($lockedPost['media_type']??null))throw new RuntimeException('native_content_mutation_denied');
                 if ($this->isNativeRepost($lockedPost)) return false;
+                if(!$this->telegramMediaOptionsCompatible($lockedPost,(array)$content['media']))return false;
+                $replacement=array_replace($lockedPost,['media_type'=>$content['media_type'],'media_file_id'=>$content['media_file_id'],'media_json'=>$this->encodeJson($content['media'])]);
+                PostedTelegramCaptionPlacement::captureLocked($this->pdo,$lockedPost,false);
+                if($captionAbove){$checked=array_replace($replacement,['repost_chat_id'=>null,'repost_message_id'=>null,'repost_input_chat_id'=>null,'repost_input_message_id'=>null]);$checked['_telegram_post_options']=$this->telegramPostOptions($lockedPost);PostedTelegramCaptionPlacement::assertCompatible($checked);}
+                if(!$this->telegramInboundSpoilerLocked($lockedPost,$content))return false;
+                if(PostedTelegramSourceSpoiler::mediaFingerprint($lockedPost)!==PostedTelegramSourceSpoiler::mediaFingerprint($replacement)){PostedTelegramSourceSpoiler::detachLocked($this->pdo,$lockedPost);PostedTelegramCaptionVector::detachLocked($this->pdo,$lockedPost);}
                 $this->pdo->prepare(
                     "UPDATE posted_posts
                      SET media_type=:media_type,media_file_id=:media_file_id,media_json=:media_json,
@@ -3103,6 +3400,8 @@ final class PostedBot
                         :null,
                     'id'=>$postId,
                 ]);
+                $placementPost=$this->post($postId);if(!is_array($placementPost))throw new RuntimeException('caption_placement_replacement_missing');PostedTelegramCaptionPlacement::captureLocked($this->pdo,$placementPost,$captionAbove);
+                $albumPost=$this->post($postId);if(is_array($albumPost))$this->registerTelegramAlbumLocked($userId,$albumPost,$message);
                 return true;
             }
         );
@@ -3112,6 +3411,7 @@ final class PostedBot
             return;
         }
         $groupId = trim((string) ($message['media_group_id'] ?? ''));
+        if($this->hasTelegramAlbumCollection($userId,$postId,$message))return;
         if ($groupId !== '') {
             $this->setState($userId, 'collecting_media_group', ['post_id' => $postId, 'media_group_id' => $groupId]);
         } else {
@@ -3184,10 +3484,12 @@ final class PostedBot
             $this->telegram->sendMessage($userId, 'Нет доступа к каналу.');
             return;
         }
-        $content = $this->contentFromMessage($message);
+        $nativeInput=false;foreach(PostedTelegramNativeContent::KINDS as$nativeKind)if(array_key_exists($nativeKind,$message))$nativeInput=true;
+        try{$content=$this->contentFromMessage($message);if(isset($content['native_content']))PostedTelegramNativeSchema::requireEnabled($this->pdo);}catch(Throwable$e){$this->telegram->sendMessage($userId,'Содержимое не принято. Исходные данные сохранены: '.$e->getMessage());return;}
         $repost = $this->forwardedChannelOrigin($message);
         $repostInput = $repost === null ? null : $this->repostInput($message);
-        if ($content['text'] === '' && $content['media_file_id'] === null && $repost === null) {
+        try{$captionAbove=PostedTelegramCaptionPlacement::input($message,$content,$repost);}catch(InvalidArgumentException$e){$this->telegram->sendMessage($userId,$e->getMessage());return;}
+        if ($content['text'] === '' && $content['media_file_id'] === null && !isset($content['native_content']) && $repost === null) {
             $this->telegram->sendMessage($userId, 'Нужен текст либо поддерживаемое медиа с подписью.');
             return;
         }
@@ -3196,7 +3498,8 @@ final class PostedBot
                 $userId,
                 $channelId,
                 'post',
-                function (array $_channel,array $permission) use ($channelId,$userId,$content,$repost,$repostInput,$managerCategoryId): int {
+                function (array $_channel,array $permission) use ($channelId,$userId,$content,$repost,$repostInput,$managerCategoryId,$message,$captionAbove): int {
+                    if(isset($content['native_content'])){PostedTelegramNativeSchema::requireEnabled($this->pdo);if(trim((string)($_channel['post_autosignature']??''))!==''||$repost!==null)throw new InvalidArgumentException('Для этого вида содержимого требуется пустая подпись канала и явный режим копии. Данные не изменены.');}
                     $resolvedCategoryId=$this->resolveTelegramManagerCategoryLocked(
                         $userId,
                         $channelId,
@@ -3238,7 +3541,10 @@ final class PostedBot
                         throw new RuntimeException('Не удалось создать черновик.');
                     }
                     $post = $this->post($postId);
+                    if(is_array($post)&&isset($content['native_content']))PostedTelegramNativeStore::captureLocked($this->pdo,$post,$content['native_content']);
                     if (is_array($post)) {
+                        PostedTelegramCaptionPlacement::captureLocked($this->pdo,$post,$captionAbove);
+                        if(!isset($content['native_content'])&&!$this->telegramInboundSpoilerLocked($post,$content))throw new InvalidArgumentException('Спойлер нельзя совмещать с платным медиа.');
                         $buttons = $this->rebindInteractiveButtons(
                             $this->decodeJson((string) ($post['buttons_json'] ?? '[]')),
                             $postId
@@ -3249,15 +3555,18 @@ final class PostedBot
                                 'id' => $postId,
                             ]);
                     }
+                    if(is_array($post)&&!isset($content['native_content']))$this->registerTelegramAlbumLocked($userId,$post,$message);
                     return $postId;
                 }
             );
         } catch (Throwable $exception) {
-            $this->clearState($userId);
+            if($exception instanceof PostedTelegramAlbumStaleInputException)throw $exception;
+            if(!$nativeInput){if($this->telegramAlbumIngressActive)$this->clearTelegramAlbumInputIfCurrent($userId);else$this->clearState($userId);}
             $this->telegram->sendMessage($userId, 'Нет доступа к каналу: ' . $exception->getMessage());
             return;
         }
         $groupId = trim((string) ($message['media_group_id'] ?? ''));
+        if($this->hasTelegramAlbumCollection($userId,$postId,$message))return;
         if ($groupId !== '') {
             $this->setState($userId, 'collecting_media_group', ['post_id' => $postId, 'media_group_id' => $groupId]);
         } else {
@@ -3283,6 +3592,7 @@ final class PostedBot
     private function handleDraftCallback(int $userId, string $data, ?array $target = null): void
     {
         $parts = explode(':', $data);
+        $target = $this->telegramDraftEditorCallbackTarget($parts, $target);
         $action = (string) ($parts[1] ?? '');
         $action = match ($action) { 'sc' => 'schedule_confirm', 'sn' => 'schedule_noconfirm', default => $action };
         $postId = (int) ($parts[2] ?? 0);
@@ -3314,6 +3624,10 @@ final class PostedBot
                 $target['preserve_message']=true;
             }
         }
+        if($this->telegramAlbumButtonAction($action)&&!$this->telegramPostInlineButtonsAllowed($post)){
+            $this->telegram->sendMessage($userId,'Кнопки недоступны для альбомов.');return;
+        }
+        if(PostedTelegramNativeContent::isKind($post['media_type']??null)&&in_array($action,['edit_text','add_media','remove_media','preview','media','convert_copy'],true)){$this->showDraftActions($userId,$postId,'Для этого вида содержимого действие недоступно. Данные сохранены.',$target);return;}
         if($action==='main'){
             $this->showDraftActions($userId,$postId,'',$target);
             return;
@@ -3369,10 +3683,11 @@ final class PostedBot
             }
             try {
                 $outcome=$this->publishClaimedPost($claimed, $userId);
-                $this->telegram->sendMessage($userId,$this->publicationOutcomeMessage($outcome));
             } catch (Throwable $exception) {
                 $this->telegram->sendMessage($userId, 'Не удалось отправить: ' . $exception->getMessage());
+                return;
             }
+            $this->sendTelegramPublicationOutcome($userId,$claimed,$outcome,$target);
             return;
         }
         if ($action === 'convert_copy') {
@@ -3387,6 +3702,11 @@ final class PostedBot
                     if (!$this->hasStoredRepostCopy($lockedPost)) {
                         return false;
                     }
+                    if(PostedTelegramSourceSpoiler::transitionToCopyLocked($this->pdo,$lockedPost)){
+                        if($this->telegramPostOptions($lockedPost)['paid_media_stars']!==null)throw new InvalidArgumentException('Спойлер источника нельзя заменить платным медиа.');
+                        PostedTelegramPostOptions::saveLocked($this->pdo,$lockedPost,['media_spoiler'=>true]);
+                    }
+                    $this->telegramMultipostConvertCopyLocked($lockedPost);
                     $this->pdo->prepare(
                         "UPDATE posted_posts
                          SET repost_chat_id=NULL,repost_message_id=NULL,
@@ -3418,6 +3738,12 @@ final class PostedBot
             return;
         }
         if ($action === 'add_media') {
+            if ($this->telegramPreviewMediaEligible($post)) {
+                if (!$this->beginTelegramDraftPreviewMedia($userId, $postId, $target)) {
+                    $this->telegram->sendMessage($userId, 'Меню устарело. Откройте добавление медиа заново.');
+                }
+                return;
+            }
             $this->setState($userId, 'await_draft_media', ['post_id' => $postId]);
             $this->telegram->sendMessage($userId, 'Отправьте новое медиа. Чтобы снять медиа, нажмите кнопку удаления медиа.');
             return;
@@ -3429,11 +3755,15 @@ final class PostedBot
                 ['draft'],
                 function (array $lockedPost) use ($postId): bool {
                     if ($this->isNativeRepost($lockedPost)) return false;
+                    PostedTelegramSourceSpoiler::detachLocked($this->pdo,$lockedPost);
+                    PostedTelegramCaptionVector::detachLocked($this->pdo,$lockedPost);
+                    PostedTelegramCaptionPlacement::captureLocked($this->pdo,$lockedPost,false);
                     $this->pdo->prepare(
                         "UPDATE posted_posts
                          SET media_type='none',media_file_id=NULL,media_json=NULL
                          WHERE id=:id AND status='draft'"
                     )->execute(['id' => $postId]);
+                    PostedTelegramPostOptions::saveLocked($this->pdo,$lockedPost,['media_spoiler'=>false,'paid_media_stars'=>null]);
                     return true;
                 }
             ) !== true) {
@@ -3466,7 +3796,7 @@ final class PostedBot
             return;
         }
         if ($action === 'comments') {
-            $this->showDraftActions($userId, $postId, '', $target);
+            $this->setTelegramDraftComments($userId, $postId, $desiredFlag, $target);
             return;
         }
         if ($action === 'reply') {
@@ -3585,8 +3915,9 @@ final class PostedBot
             $this->telegram->sendMessage($userId, 'Пересылка в другой канал будет доступна через выбор канала. Сейчас можно использовать «Копировать» и выбрать нужный канал при создании нового поста.');
             return;
         }
+        if($action==='buttons_clear'){$this->clearTelegramDraftUrlButtons($userId,$data,$target);return;}
         if ($action === 'buttons') {
-            $this->beginDraftInput($userId,'await_buttons',['post_id'=>$postId],$this->buttonsHelpText(),['reply_markup'=>['inline_keyboard'=>$this->buttonTypeKeyboard($postId)]],$target);
+            $this->showTelegramDraftUrlButtonMenu($userId,$postId,$target);
             return;
         }
         if ($action === 'reactions') {
@@ -3790,15 +4121,17 @@ final class PostedBot
         ]]],$target);
     }
 
-    private function scheduleDraft(int $userId,int $postId,string $scheduledAt,?string $confirmation=null,bool $disableConfirmation=false):void
+    private function scheduleDraft(int $userId,int $postId,string $scheduledAt,?string $confirmation=null,bool $disableConfirmation=false,bool $calendar=false):void
     {
         try {
         $updated=$this->withTelegramManagedPostLock(
             $userId,$postId,['draft'],
-            function(array $lockedPost)use($userId,$postId,$scheduledAt,$confirmation,$disableConfirmation):bool{
+            function(array $lockedPost)use($userId,$postId,$scheduledAt,$confirmation,$disableConfirmation,$calendar):bool{
+                if($calendar){$when=DateTimeImmutable::createFromFormat('!Y-m-d H:i:s',$scheduledAt,$this->storageTimezone());if(!$when||$when->format('Y-m-d H:i:s')!==$scheduledAt||$when->getTimestamp()<=time())throw new InvalidArgumentException('Выбранное время уже прошло. Обновите график.');PostedTelegramAlbumCollector::assertReadyLocked($this->pdo,$lockedPost);}
                 if ($confirmation !== null) {
                     $this->assertTelegramDraftConfirmation($userId,$lockedPost,'schedule',$confirmation,$scheduledAt);
                 }
+                $topChannel=$this->channel((int)$lockedPost['channel_id']);PostedTelegramTopHold::assertProjectedScheduleLocked($this->pdo,$topChannel,$lockedPost,$scheduledAt);
                 $stmt=$this->pdo->prepare("UPDATE posted_posts SET status='scheduled',scheduled_at=:scheduled_at WHERE id=:id AND status='draft'");
                 $stmt->execute(['scheduled_at'=>$scheduledAt,'id'=>$postId]);
                 if ($stmt->rowCount()!==1) return false;
@@ -3837,6 +4170,7 @@ final class PostedBot
             'state'=>$user['state']??null,'state_data'=>$user['state_data']??null,
             'confirmation_enabled'=>(int)($user['setting_confirm_schedule']??0),
             'submission'=>$this->telegramSubmissionKey($post),'options'=>$options,
+            'delivery_options'=>$this->telegramPostOptions($post),
         ])),0,12);
     }
 
@@ -3900,7 +4234,7 @@ final class PostedBot
         $this->setState($userId,'await_schedule',$state);
     }
 
-    private function handleEditCallback(int $userId, string $data): void
+    private function handleLegacyEditCallback(int $userId, string $data): void
     {
         $parts = explode(':', $data);
         $action = (string) ($parts[1] ?? '');
@@ -3908,6 +4242,7 @@ final class PostedBot
         $desiredFlag=in_array((string)($parts[3]??''),['0','1'],true)
             ?(int)$parts[3]
             :null;
+        if($this->handleTelegramPublishedAlbumEditCallback($userId,$postId,$action,$parts))return;
         $post = $this->editSessionPost($userId,$postId);
         if (!$post || !$this->can($userId, (int) $post['channel_id'], 'manage_posts')) {
             $this->clearState($userId);
@@ -3915,9 +4250,14 @@ final class PostedBot
             return;
         }
 
+        if($action==='editor_back'){$this->showEditPostActions($userId,$postId);return;}
+        if($action==='clear_text'){if($this->stageEditablePostChanges($userId,$postId,['text'=>null,'text_entities_json'=>[]])){$this->clearState($userId);$this->showEditPostActions($userId,$postId);}return;}
         if ($action === 'text') {
             $this->setState($userId, 'await_edit_text', ['post_id' => $postId]);
-            $this->telegram->sendMessage($userId, 'Отправьте новый текст или подпись.');
+            $isMedia=(string)($post['media_type']??'none')!=='none';
+            $this->telegram->sendMessage($userId,$isMedia?'Отправьте новое описание для поста.':'Отправьте новый текст для поста.',['reply_markup'=>['inline_keyboard'=>[
+                [['text'=>$isMedia?'Удалить описание':'Удалить текст','callback_data'=>'edit:clear_text:'.$postId]],[['text'=>'← Назад','callback_data'=>'edit:editor_back:'.$postId]],
+            ]]]);
             return;
         }
         if ($action === 'media') {
@@ -3930,7 +4270,15 @@ final class PostedBot
             return;
         }
         if ($action === 'buttons') {
-            $this->setState($userId, 'await_edit_buttons', ['post_id' => $postId]);
+            $prepared=$this->withTelegramManagedPostLock($userId,$postId,['sent'],function(array $lockedPost)use($userId,$postId):bool|string{
+                if(!$this->telegramPostInlineButtonsAllowed($lockedPost))return 'album';
+                $query=$this->pdo->prepare('SELECT * FROM posted_edit_sessions WHERE user_id=? AND post_id=? LIMIT 1 FOR UPDATE');
+                $query->execute([$userId,$postId]);$session=$query->fetch();if(!is_array($session))return false;
+                $document=$this->editSessionDocument($session,$lockedPost);
+                if(!$this->telegramPostInlineButtonsAllowed($this->postWithEditableSnapshot($lockedPost,$document['draft'])))return 'album';
+                $this->setState($userId,'await_edit_buttons',['post_id'=>$postId]);return true;
+            },false,true);
+            if($prepared!==true){$this->telegram->sendMessage($userId,$prepared==='album'?'Кнопки недоступны для альбомов.':'Сессия редактирования устарела. Откройте пост заново.');return;}
             $this->telegram->sendMessage($userId, $this->buttonsHelpText());
             return;
         }
@@ -3965,8 +4313,9 @@ final class PostedBot
             $this->telegram->sendMessage($userId, 'Пост не найден, сессия устарела или нет доступа.');
             return;
         }
-        $content = $this->contentFromMessage($message);
+        $content = $this->telegramTextInputContent($message);
         $text = (string) $content['text'];
+        if($text===''){$this->telegram->sendMessage($userId,'Отправьте новый текст или подпись.');return;}
         if(!$this->stageEditablePostChanges(
             $userId,
             $postId,
@@ -3993,7 +4342,8 @@ final class PostedBot
             $this->telegram->sendMessage($userId, 'Telegram не разрешает превратить уже опубликованный текстовый пост в пост с медиа. Можно изменить текст и кнопки, либо создать новый пост с медиа.');
             return;
         }
-        $content = $this->contentFromMessage($message);
+        try{$content = $this->contentFromMessage($message);}catch(InvalidArgumentException){$this->telegram->sendMessage($userId,'Отправьте поддерживаемое медиа. Исходные данные и текущий ввод сохранены.');return;}
+        if(isset($content['native_content'])){$this->telegram->sendMessage($userId,'Создайте новый пост с этим видом содержимого. Исходный пост сохранён.');return;}
         if ($content['media_file_id'] === null) {
             $this->telegram->sendMessage($userId, 'Отправьте фото, видео, анимацию, документ, аудио или голосовое сообщение.');
             return;
@@ -4003,6 +4353,7 @@ final class PostedBot
             $this->telegram->sendMessage($userId, 'Telegram не разрешает заменить опубликованный файл голосовым сообщением или заменить само голосовое сообщение. Можно изменить подпись и кнопки; для нового файла создайте отдельный пост.');
             return;
         }
+        try{$captionAbove=PostedTelegramCaptionPlacement::input($message,$content);}catch(InvalidArgumentException$e){$this->telegram->sendMessage($userId,$e->getMessage());return;}
         $changes=[
             'media_type'=>$content['media_type'],
             'media_file_id'=>$content['media_file_id'],
@@ -4012,7 +4363,7 @@ final class PostedBot
             $changes['text']=$content['text']!==''?$content['text']:null;
             $changes['text_entities_json']=$content['text_entities'];
         }
-        if(!$this->stageEditablePostChanges($userId,$postId,$changes)){
+        if(!$this->stageEditablePostChanges($userId,$postId,$changes,$captionAbove)){
             return;
         }
         $this->clearState($userId);
@@ -4021,6 +4372,8 @@ final class PostedBot
 
     private function showEditPostActions(int $userId, int $postId, string $prefixText = ''): void
     {
+        if($this->showTelegramPublishedSingleEditor($userId,$postId,$prefixText))return;
+        if($this->showTelegramPublishedAlbumEditor($userId,$postId))return;
         $post = $this->editSessionPost($userId,$postId);
         if (!$post || !$this->can($userId,(int)$post['channel_id'],'manage_posts')) {
             $this->clearState($userId);
@@ -4032,19 +4385,21 @@ final class PostedBot
         $this->sendPostPreview($userId, array_replace($post, [
             'repost_chat_id' => null,
             'repost_message_id' => null,
-        ]), $prefixText);
-        $pinButton = !empty($post['pin_after_publish']) ? '✅ Закрепить' : 'Закрепить';
+        ]));
+        $pinButton = !empty($post['pin_after_publish']) ? '✅ Закрепить' : '☑️ Закрепить';
         $isMedia=(string)($post['media_type']??'none')!=='none';
         $mediaLabel=$isMedia?'Медиа':'Добавить медиа';
         $textLabel=$isMedia?'Изменить описание':'Изменить текст';
-        $this->telegram->sendMessage($userId, 'Изменение опубликованного поста:', [
+        $storedPost=$this->post($postId);
+        $buttonsAllowed=is_array($storedPost)&&$this->telegramPostInlineButtonsAllowed($storedPost)&&$this->telegramPostInlineButtonsAllowed($post);
+        $this->telegram->sendMessage($userId, 'Настройте пост перед публикацией.', [
             'reply_markup' => [
                 'inline_keyboard' => [
                     [['text' => $mediaLabel, 'callback_data' => 'edit:media:' . $postId], ['text' => $textLabel, 'callback_data' => 'edit:text:' . $postId]],
-                    [['text' => 'Кнопки', 'callback_data' => 'edit:buttons:' . $postId]],
+                    ...($buttonsAllowed?[[['text'=>'Кнопки','callback_data'=>'edit:buttons:'.$postId]]]:[]),
                     [['text' => $pinButton, 'callback_data' => 'edit:pin:' . $postId . ':' . (empty($post['pin_after_publish'])?1:0)]],
-                    [['text' => 'Сохранить изменения', 'callback_data' => 'edit:save:' . $postId]],
-                    [['text' => 'Отменить', 'callback_data' => 'edit:cancel:' . $postId]],
+                    [['text' => '💾 Сохранить изменения', 'callback_data' => 'edit:save:' . $postId]],
+                    [['text' => '← Назад', 'callback_data' => 'edit:cancel:' . $postId]],
                 ],
             ],
         ]);
@@ -4052,13 +4407,24 @@ final class PostedBot
 
     private function saveEditedPost(int $userId, int $postId): void
     {
+        if($this->saveTelegramPublicButtonEdit($userId,$postId))return;
+        // Unsupported Placement edits retain this fallback HOLD; supported signed-photo edits were intercepted above.
+        $placementHint=$this->post($postId);
+        if(is_array($placementHint)&&($placementHint['status']??null)==='sent'&&PostedTelegramPolicy::operatorAllowed($this->config,$userId,$this->pdo)&&$this->isKnownActiveUser($this->user($userId))&&$this->can($userId,(int)$placementHint['channel_id'],'manage_posts')){
+            $placementSession=$this->pdo->prepare('SELECT * FROM posted_edit_sessions WHERE user_id=? AND post_id=? LIMIT 1');$placementSession->execute([$userId,$postId]);$placementSession=$placementSession->fetch();
+            if(is_array($placementSession)){
+                try{$placementDocument=$this->editSessionDocument($placementSession,$placementHint);$placementHold=array_key_exists('caption_placement',$placementDocument);}catch(Throwable){$placementHold=true;}
+                if($placementHold){if(!$this->pdo->inTransaction())$this->telegram->sendMessage($userId,'Изменения сохранены в редакторе. Безопасное сохранение описания над медиа пока недоступно; исходная публикация не изменялась.');return;}
+            }
+        }
+        if($this->saveTelegramPublishedAlbumEdit($userId,$postId))return;
         $post = $this->post($postId);
         if (
             !$post
             ||(string)($post['status']??'')!=='sent'
             ||!$this->can($userId, (int) $post['channel_id'], 'manage_posts')
         ) {
-            $this->clearState($userId);
+            $this->telegramPublishedSingleSaveClear($userId);
             $this->telegram->sendMessage($userId, 'Пост уже недоступен для изменения или у вас больше нет прав.');
             return;
         }
@@ -4093,7 +4459,7 @@ final class PostedBot
                 ||(int)($lockedChannel['added_by']??0)<=0
             ){
                 $this->pdo->rollBack();
-                $this->clearState($userId);
+                $this->telegramPublishedSingleSaveClear($userId);
                 $this->telegram->sendMessage($userId,'Канал отключён или его владелец изменился.');
                 return;
             }
@@ -4112,16 +4478,17 @@ final class PostedBot
             $lockedPost=$postStmt->fetch();
             if(!is_array($lockedPost)||(string)($lockedPost['status']??'')!=='sent'){
                 $this->pdo->rollBack();
-                $this->clearState($userId);
+                $this->telegramPublishedSingleSaveClear($userId);
                 $this->telegram->sendMessage($userId,'Пост уже недоступен для изменения.');
                 return;
             }
             if (!$this->lockActiveTelegramActor($userId)) {
                 $this->pdo->rollBack();
-                $this->clearState($userId);
+                $this->telegramPublishedSingleSaveClear($userId);
                 $this->telegram->sendMessage($userId,'Пользователь заблокирован.');
                 return;
             }
+            PostedTelegramPublicButtonEdit::assertLegacySaveLocked($this->pdo,$postId);
             $lockedPost['chat_id']=(string)$lockedChannel['chat_id'];
 
             $permissionStmt=$this->pdo->prepare(
@@ -4137,7 +4504,7 @@ final class PostedBot
             ]);
             if((int)($permissionStmt->fetchColumn()?:0)!==1){
                 $this->pdo->rollBack();
-                $this->clearState($userId);
+                $this->telegramPublishedSingleSaveClear($userId);
                 $this->telegram->sendMessage($userId,'Доступ к редактированию этого канала отозван.');
                 return;
             }
@@ -4152,18 +4519,33 @@ final class PostedBot
             $session=$sessionStmt->fetch();
             if(!is_array($session)){
                 $this->pdo->rollBack();
-                $this->clearState($userId);
+                $this->telegramPublishedSingleSaveClear($userId);
                 $this->telegram->sendMessage($userId,'Сессия редактирования устарела. Откройте пост заново.');
                 return;
             }
 
             $document=$this->editSessionDocument($session,$lockedPost);
+            if(array_key_exists('caption_placement',$document)){
+                $this->pdo->rollBack();
+                $this->telegram->sendMessage($userId,'Изменения сохранены в редакторе. Безопасное сохранение описания над медиа пока недоступно; исходная публикация не изменялась.');
+                return;
+            }
+            // A new signed private panel may save only the staged revision it showed.
+            // Legacy callers keep the existing backend path with a NULL expectation.
+            if($this->telegramPublishedSingleSaveHash!==null&&(!hash_equals($this->telegramPublishedSingleSaveHash,PostedTelegramPublishedSingleUi::hash($document))||$this->telegramPublishedSingleSaveInput===null||!$this->telegramPublishedSingleInputMatches($userId,$this->telegramPublishedSingleSaveInput['state'],$this->telegramPublishedSingleSaveInput['data'])||(int)$lockedChannel['added_by']!==($this->telegramPublishedSingleSaveInput['owner_id']??null)||!hash_equals((string)($this->telegramPublishedSingleSaveInput['epoch']??''),PostedTelegramAuthorityPause::generation($this->pdo,['id'=>(int)$lockedPost['channel_id']]+$lockedChannel,true)?:'legacy')||PostedTelegramAuthorityPause::blocked($this->pdo,['id'=>(int)$lockedPost['channel_id']]+$lockedChannel,true))){
+                $this->pdo->rollBack();$this->telegram->sendMessage($userId,'Сессия редактирования изменилась. Откройте пост заново.');return;
+            }
+            if(!$this->telegramPostInlineButtonsAllowed($lockedPost)&&$document['base']['buttons_json']!==$document['draft']['buttons_json']){
+                $this->pdo->rollBack();
+                $this->telegram->sendMessage($userId,'Кнопки недоступны для альбомов. Изменения сохранены в редакторе и не применялись.');
+                return;
+            }
             if($this->editablePostSnapshot($lockedPost)!==$document['base']){
                 $this->pdo->prepare(
                     'DELETE FROM posted_edit_sessions WHERE user_id=:user AND post_id=:post'
                 )->execute(['user'=>$userId,'post'=>$postId]);
                 $this->pdo->commit();
-                $this->clearState($userId);
+                $this->telegramPublishedSingleSaveClear($userId);
                 $this->telegram->sendMessage(
                     $userId,
                     'Пост уже изменил другой редактор. Ваши изменения не применены — откройте актуальный пост заново.'
@@ -4182,7 +4564,7 @@ final class PostedBot
 
             $editedPayload=$this->effectivePostPayload($editedPost);
             $buttons=$this->buttonsMarkup((array)($editedPayload['buttons']??[]));
-            $extra=['reply_markup'=>['inline_keyboard'=>$buttons]];
+            $extra=$this->telegramPostInlineButtonsAllowed($lockedPost)?['reply_markup'=>['inline_keyboard'=>$buttons]]:[];
             $text=(string)($editedPayload['text']??'');
             $textEntities=(array)($editedPayload['entities']??[]);
             $mediaType=(string)($editedPost['media_type']??'none');
@@ -4198,6 +4580,10 @@ final class PostedBot
             }
 
             if($contentChanged){
+                $sourceSpoiler=PostedTelegramSourceSpoiler::freeze($this->pdo,$lockedPost);
+                if($sourceSpoiler!==null&&$sourceSpoiler['mode']==='native'&&($sourceSpoiler['state']==='unknown'||$sourceSpoiler['media_spoiler']===true))throw new InvalidArgumentException('Состояние спойлера репоста нельзя безопасно менять обычным редактором. Создайте дубликат и явно выберите копию.');
+                $deliveryOptions=PostedTelegramPostOptions::load($this->pdo,PostedTelegramPostOptions::freeze($this->pdo,$lockedPost));
+                $paidContent=$deliveryOptions['paid_media_stars']!==null;
                 $mediaChanged=false;
                 foreach(['media_type','media_file_id','media_json'] as $field){
                     if($document['base'][$field]!==$document['draft'][$field]){
@@ -4205,6 +4591,11 @@ final class PostedBot
                         break;
                     }
                 }
+                if($paidContent&&$mediaChanged)throw new InvalidArgumentException('Медиа опубликованного платного поста нельзя заменить обычным медиа. Создайте отдельный черновик.');
+                if($mediaChanged){
+                    if(!$this->isNativeRepost($lockedPost))PostedTelegramSourceSpoiler::detachLocked($this->pdo,$lockedPost);
+                }
+                if($deliveryOptions['media_spoiler']&&!in_array($mediaType,['photo','video','animation'],true))throw new InvalidArgumentException('Выбранный формат не поддерживает спойлер. Исходное медиа не изменено.');
                 // editMessageCaption can succeed without replacing any file.
                 // Never persist an unsupported voice replacement as if it did.
                 if($mediaChanged&&(
@@ -4214,7 +4605,7 @@ final class PostedBot
                     throw new RuntimeException('Telegram не разрешает заменять опубликованный файл голосовым сообщением или заменять само голосовое сообщение. Измените только подпись и кнопки либо создайте новый пост.');
                 }
                 if(
-                    in_array($mediaType,['photo','video','animation','document','audio'],true)
+                    !$paidContent&&in_array($mediaType,['photo','video','animation','document','audio'],true)
                     &&trim((string)($editedPost['media_file_id']??''))!==''
                 ){
                     if((string)($lockedPost['original_media_type']??$mediaType)==='none'){
@@ -4222,21 +4613,21 @@ final class PostedBot
                             'Telegram не разрешает превратить уже опубликованный текстовый пост в пост с медиа.'
                         );
                     }
-                    if($this->telegramUtf16Length($text)>self::PHOTO_CAPTION_LIMIT){
+                    if((($paidContent||$this->isNativeRepost($lockedPost))?$this->telegramUtf16Length($text):PostedTelegramTransportLayout::characters($text))>self::PHOTO_CAPTION_LIMIT){
                         throw new RuntimeException(
                             'Подпись к медиа при редактировании через Bot API может быть не длиннее 1024 символов.'
                         );
                     }
                     $this->applyIdempotentTelegramEdit(
-                        fn()=> $this->telegram->editMessageMedia($chatId,$messageId,[
+                        fn()=> $this->telegram->editMessageMedia($chatId,$messageId,array_merge([
                             'type'=>$mediaType,
                             'media'=>(string)$editedPost['media_file_id'],
                             'caption'=>$text,
                             'caption_entities'=>$textEntities,
-                        ],$extra)
+                        ],$deliveryOptions['media_spoiler']?['has_spoiler'=>true]:[]),$extra)
                     );
                 }elseif(in_array($mediaType,['photo','video','animation','document','audio','voice'],true)){
-                    if($this->telegramUtf16Length($text)>self::PHOTO_CAPTION_LIMIT){
+                    if((($paidContent||$this->isNativeRepost($lockedPost))?$this->telegramUtf16Length($text):PostedTelegramTransportLayout::characters($text))>self::PHOTO_CAPTION_LIMIT){
                         throw new RuntimeException(
                             'Подпись к медиа при редактировании через Bot API может быть не длиннее 1024 символов.'
                         );
@@ -4289,6 +4680,7 @@ final class PostedBot
             }
 
             $draft=$document['draft'];
+            $this->persistEditedTelegramRepostMode($lockedPost,$draft);
             $this->pdo->prepare(
                 'UPDATE posted_posts
                  SET text=:text,text_entities_json=:text_entities_json,
@@ -4313,12 +4705,11 @@ final class PostedBot
                     :null,
                 'post'=>$postId,
             ]);
-            $this->persistEditedTelegramRepostMode($lockedPost, $draft);
             $this->pdo->prepare(
                 'DELETE FROM posted_edit_sessions WHERE user_id=:user AND post_id=:post'
             )->execute(['user'=>$userId,'post'=>$postId]);
             $this->pdo->commit();
-            $this->clearState($userId);
+            $this->telegramPublishedSingleSaveClear($userId,true);
             $this->telegram->sendMessage($userId,'Изменения сохранены.');
         } catch (Throwable $exception) {
             if($this->pdo->inTransaction())$this->pdo->rollBack();
@@ -4394,6 +4785,8 @@ final class PostedBot
                 $this->pdo->rollBack();
                 return false;
             }
+            $this->persistEditedTelegramRepostMode($current,$snapshot);
+            if(!$this->isNativeRepost($current)&&PostedTelegramSourceSpoiler::mediaFingerprint($current)!==PostedTelegramSourceSpoiler::mediaFingerprint($snapshot))PostedTelegramSourceSpoiler::detachLocked($this->pdo,$current);
             $this->pdo->prepare(
                 "UPDATE posted_posts
                  SET text=:text,text_entities_json=:text_entities_json,
@@ -4421,12 +4814,11 @@ final class PostedBot
                     .mb_substr($reason->getMessage(),0,3500),
                 'post'=>$postId,
             ]);
-            $this->persistEditedTelegramRepostMode($current, $snapshot);
             $this->pdo->prepare(
                 'DELETE FROM posted_edit_sessions WHERE user_id=:user AND post_id=:post'
             )->execute(['user'=>$userId,'post'=>$postId]);
             $this->pdo->commit();
-            $this->clearState($userId);
+            $this->telegramPublishedSingleSaveClear($userId,true);
             return true;
         }catch(Throwable $recoveryError){
             if($this->pdo->inTransaction())$this->pdo->rollBack();
@@ -4458,47 +4850,49 @@ final class PostedBot
         // Telegram has applied the edited payload. Future duplicates/repeats
         // must reuse that payload instead of forwarding the unedited source.
         // Keep the immutable import source for an explicit later mode change.
+        PostedTelegramSourceSpoiler::transitionToCopyLocked($this->pdo,$post);
         $this->pdo->prepare("UPDATE posted_posts SET repost_chat_id=NULL,repost_message_id=NULL,
             repost_input_chat_id=NULL,repost_input_message_id=NULL,import_json=:import
             WHERE id=:post AND status='sent'")
             ->execute(['import' => $importJson, 'post' => (int) $post['id']]);
+        if(PostedTelegramSourceSpoiler::mediaFingerprint($post)!==PostedTelegramSourceSpoiler::mediaFingerprint($snapshot))PostedTelegramSourceSpoiler::detachLocked($this->pdo,array_replace($post,['repost_chat_id'=>null,'repost_message_id'=>null]));
     }
 
-    private function claimPostForPublish(int $postId, array $expectedStatuses, bool $due = false): ?array
+    private function claimPostForPublish(int $postId,array $expectedStatuses,bool $due=false): ?array
     {
-        $expectedStatuses=array_values(array_intersect($expectedStatuses,['draft','scheduled','failed']));
-        if($expectedStatuses===[])return null;
-        $before=$this->post($postId);
-        if(!$before||!in_array((string)($before['status']??''),$expectedStatuses,true))return null;
-        if (!$this->ensureTelegramChannelTenure((int) ($before['channel_id'] ?? 0))) {
-            return null;
-        }
-        $claimedFrom=(string)$before['status'];
-        $marks=implode(',',array_fill(0,count($expectedStatuses),'?'));
-        $sql="UPDATE posted_posts p JOIN posted_channels c ON c.id=p.channel_id
-              SET p.status='publishing',p.publish_started_at=NOW(),p.error_text=NULL
-              WHERE p.id=? AND p.status IN ({$marks})
-                AND c.is_active=1
-                AND c.added_by IS NOT NULL
-                AND c.added_by>0";
-        if($due)$sql.=' AND p.scheduled_at IS NOT NULL AND p.scheduled_at<=NOW()';
-        $stmt=$this->pdo->prepare($sql);
-        $stmt->execute([$postId,...$expectedStatuses]);
-        if($stmt->rowCount()!==1)return null;
-            $this->pdo->prepare(
-                'UPDATE posted_posts SET delete_after_minutes=:safe_minutes
-                 WHERE id=:post AND delete_after_minutes=2880'
-            )->execute([
-                'safe_minutes'=>self::TELEGRAM_MAX_AUTO_DELETE_MINUTES,
-                'post'=>$postId,
-            ]);
-            $claimed=$this->post($postId);
-        if($claimed)$claimed['_claimed_from_status']=$claimedFrom;
-        return $claimed;
+        $expectedStatuses=array_values(array_intersect($expectedStatuses,['draft','scheduled','failed']));if($expectedStatuses===[])return null;
+        $before=$this->post($postId);if(!$before||!in_array($before['status'],$expectedStatuses,true))return null;
+        $own=!$this->pdo->inTransaction();
+        // Existing managed callers already performed network preflight before their transaction.
+        if($own&&!$this->ensureTelegramChannelTenure((int)$before['channel_id']))return null;
+        if($own)$this->pdo->beginTransaction();
+        try{
+            $s=$this->pdo->prepare('SELECT * FROM posted_channels WHERE id=? LIMIT 1 FOR UPDATE');$s->execute([(int)$before['channel_id']]);$channel=$s->fetch();
+            $s=$this->pdo->prepare('SELECT * FROM posted_posts WHERE id=? LIMIT 1 FOR UPDATE');$s->execute([$postId]);$current=$s->fetch();
+            if(!$channel||!$current||(int)$current['channel_id']!==(int)$channel['id']||empty($channel['is_active'])||(int)$channel['added_by']<=0||!in_array($current['status'],$expectedStatuses,true)){
+                if($own)$this->pdo->commit();return null;}
+            PostedTelegramAuthorityPause::assertDeliveryLocked($this->pdo,$channel);
+            $prior=$current['status'];$marks=implode(',',array_fill(0,count($expectedStatuses),'?'));
+            $sql="UPDATE posted_posts SET status='publishing',publish_started_at=NOW(),error_text=NULL WHERE id=? AND status IN ({$marks})";
+            if($due)$sql.=' AND scheduled_at IS NOT NULL AND scheduled_at<=NOW()';
+            $s=$this->pdo->prepare($sql);$s->execute([$postId,...$expectedStatuses]);if($s->rowCount()!==1){if($own)$this->pdo->commit();return null;}
+            $this->pdo->prepare('UPDATE posted_posts SET delete_after_minutes=? WHERE id=? AND delete_after_minutes=2880')->execute([self::TELEGRAM_MAX_AUTO_DELETE_MINUTES,$postId]);
+            $claimed=$this->post($postId);if(!$claimed)throw new RuntimeException('Claimed post disappeared.');
+            $claim=PostedTelegramAuthorityPause::createClaimLocked($this->pdo,$claimed,$channel,$prior);
+            $claimed['_authority_claim_nonce']=$claim['nonce'];$claimed['_authority_generation']=$claim['generation'];$claimed['_claimed_from_status']=$prior;
+            if($own)$this->pdo->commit();return$claimed;
+        }catch(PostedTelegramAuthorityPauseException $e){if($own&&$this->pdo->inTransaction())$this->pdo->rollBack();if($own)return null;throw$e;
+        }catch(Throwable $e){if($own&&$this->pdo->inTransaction())$this->pdo->rollBack();throw$e;}
     }
+
 
     private function telegramSubmissionKey(array $post): string
     {
+        $post=PostedTelegramNativeStore::freeze($this->pdo,$post);
+        $post=PostedTelegramCaptionVector::freeze($this->pdo,$post);
+        $post=PostedTelegramTransportLayout::freeze($this->pdo,$post);
+        $post=PostedTelegramCaptionPlacement::freeze($this->pdo,$post);
+        $post=PostedTelegramPublicButtonLayout::freeze($this->pdo,$post,$this->effectivePostPayload($post));
         $payload=$this->effectivePostPayload($post);
         $media=array_map(
             static fn(array $item):array=>[
@@ -4522,34 +4916,45 @@ final class PostedBot
             'reply_chat_id'=>(string)($post['reply_chat_id']??''),
             'reply_message_id'=>(int)($post['reply_message_id']??0),
         ];
+        $options=$this->telegramPostOptions($post);
+        // Keep the established legacy payload identity and cross-post duplicate
+        // gate when no delivery behavior is selected. Bound row IDs are metadata.
+        $behavior=PostedTelegramPostOptions::behavior($options);
+        if($behavior!==[])$document['delivery_options']=$behavior;
+        $captions=PostedTelegramCaptionVector::behavior($post);if($captions!==[])$document['caption_vector']=$captions;
+        $layout=$this->telegramTransportLayoutBehavior($post);if($layout!==[])$document['transport_layout']=$layout;
+        $placement=PostedTelegramCaptionPlacement::behavior($post);if($placement!==[])$document['caption_placement']=$placement;
+        $public=PostedTelegramPublicButtonLayout::behavior($post);if($public!==[])$document['public_button_layout']=$public;
+        $multipost=$this->telegramMultipostSubmissionSnapshot($post);
+        if($multipost!==null)$document['multipost']=$multipost;
+        $authority=PostedTelegramAuthorityPause::submissionContext($this->pdo,$post);
+        if($authority!==null)$document['authority']=$authority;
+        $top=PostedTelegramTopHold::submission($this->pdo,$post);if($top!==null)$document['top']=$top;
+        $album=PostedTelegramAlbumCollector::submission($this->pdo,$post);if($album!==null)$document['album']=$album;
+        $native=PostedTelegramNativeStore::behavior($post);if($native!==[])$document['native_content']=$native;
         return hash('sha256',$this->encodeJson($document));
     }
 
     private function reserveTelegramPublishAttempt(array $post, ?int $actorId = null): bool
     {
-        $this->pdo->beginTransaction();
+        $post=PostedTelegramCaptionPlacement::freeze($this->pdo,$post);
+        $multipostHint=$this->telegramMultipostReserveHint($post);
+        PostedTelegramRootedAccess::begin($this->pdo,$this->config);
         try{
-            $channel=$this->pdo->prepare(
-                'SELECT id,title,is_active,added_by,bot_can_post
-                 FROM posted_channels
-                 WHERE id=:channel
-                 LIMIT 1
-                 FOR UPDATE'
-            );
-            $channel->execute(['channel'=>(int)$post['channel_id']]);
-            $lockedChannel=$channel->fetch();
+            $lockedChannels=$this->telegramMultipostLockChannels($multipostHint);
+            $lockedChannel=$lockedChannels[(int)$post['channel_id']]??null;
             if(
                 !is_array($lockedChannel)
                 ||empty($lockedChannel['is_active'])
                 ||(int)($lockedChannel['added_by']??0)<=0
                 ||empty($lockedChannel['bot_can_post'])
             ){
-                $this->pdo->rollBack();
+                PostedTelegramRootedAccess::rollback($this->pdo);
                 return false;
             }
             $lockedPost=$this->pdo->prepare(
                 "SELECT status,channel_id,author_id,pin_after_publish,manager_category_id,
-                        manager_post_quota_charged,manager_pin_quota_charged
+                        id,manager_post_quota_charged,manager_pin_quota_charged,repeat_interval_minutes,publish_started_at
                  FROM posted_posts
                  WHERE id=:post
                  LIMIT 1
@@ -4562,21 +4967,31 @@ final class PostedBot
                 ||(string)($currentPost['status']??'')!=='publishing'
                 ||(int)($currentPost['channel_id']??0)!==(int)$post['channel_id']
             ){
-                $this->pdo->rollBack();
+                PostedTelegramRootedAccess::rollback($this->pdo);
                 return false;
             }
+            foreach($lockedChannels as$authorityChannel)PostedTelegramAuthorityPause::assertDeliveryLocked($this->pdo,$authorityChannel);
+            PostedTelegramAuthorityPause::ownedClaimLocked($this->pdo,$post,$currentPost,$lockedChannel,true);
+            PostedTelegramAlbumCollector::assertReadyLocked($this->pdo,$currentPost);
+            PostedTelegramTopHold::assertAvailableLocked($this->pdo,$lockedChannel,(int)$post['id']);
             $ownerId=(int)($lockedChannel['added_by']??0);
             $authorId=(int)($currentPost['author_id']??0);
             $requiredActors=[$ownerId,$authorId];
+            foreach($lockedChannels as$involvedChannel)$requiredActors[]=(int)($involvedChannel['added_by']??0);
             if($actorId!==null)$requiredActors[]=$actorId;
             if(
                 $ownerId<=0
                 ||$authorId<=0
                 ||!$this->lockActiveTelegramActors($requiredActors)
             ){
-                $this->pdo->rollBack();
+                if(count($multipostHint['channel_ids'])>1)throw new PostedTelegramMultipostPreflightException('Мультипубликация приостановлена: автор или владелец одного из каналов отключён. Пост и дата сохранены.');
+                PostedTelegramRootedAccess::rollback($this->pdo);
                 return false;
             }
+            $this->telegramPolicyReserveLocked($post,$lockedChannel,$authorId,$actorId);
+            if((int)($post['repeat_interval_minutes']??0)>0||(int)($currentPost['repeat_interval_minutes']??0)>0)
+                PostedTelegramPolicy::requireChannel($this->pdo,$this->config,$lockedChannel,'premium');
+            $this->telegramMultipostValidateTargetsLocked($post,$lockedChannels,$multipostHint,$authorId);
             if ($actorId !== null) {
                 $permission = $this->pdo->prepare(
                     'SELECT can_post,can_manage_posts
@@ -4598,7 +5013,7 @@ final class PostedBot
                         && (int) ($currentPermission['can_manage_posts'] ?? 0) !== 1
                     )
                 ) {
-                    $this->pdo->rollBack();
+                    PostedTelegramRootedAccess::rollback($this->pdo);
                     return false;
                 }
             }
@@ -4709,9 +5124,16 @@ final class PostedBot
                     }
                 }
             }
+            $post=PostedTelegramNativeStore::freeze($this->pdo,$post);
+            if(PostedTelegramNativeContent::isKind($post['media_type']??null))$this->telegramNativeAssertOrdinaryPayload($post,$this->effectivePostPayload($post));
+            $post=PostedTelegramCaptionVector::freeze($this->pdo,$post);
+            $post=PostedTelegramTransportLayout::freeze($this->pdo,$post);
+        $post=PostedTelegramPublicButtonLayout::freeze($this->pdo,$post,$this->effectivePostPayload($post));
+            PostedTelegramTopHold::reserveLocked($this->pdo,$this->config,$post,$lockedChannel);
             $pendingParts=$this->expectedTelegramPendingParts($post);
             $messageSlots=array_fill(0,count($pendingParts),0);
             $continuation=$this->telegramContinuationAfterPendingPrimary($post);
+            $this->telegramMultipostReserveLocked($post,$lockedChannel,$pendingParts,$continuation);
             $stmt=$this->pdo->prepare(
                 "INSERT INTO posted_telegram_publish_attempts
                     (post_id,channel_id,chat_id,gate_channel_id,submission_key,state,
@@ -4730,63 +5152,40 @@ final class PostedBot
                 'pending_parts'=>$this->encodeJson($pendingParts),
                 'continuation'=>$this->encodeJson($continuation),
             ]);
-            $this->pdo->commit();
+            PostedTelegramPostOptions::saveAttemptSnapshotLocked($this->pdo,$post,$this->telegramSubmissionKey($post));
+            PostedTelegramNativeStore::snapshotLocked($this->pdo,$post,$this->telegramSubmissionKey($post));
+            PostedTelegramTransportLayout::snapshotLocked($this->pdo,$post,$this->telegramSubmissionKey($post));
+            PostedTelegramCaptionPlacement::snapshotLocked($this->pdo,$post,$this->telegramSubmissionKey($post));
+            if(PostedTelegramPublicButtonLayout::mode($post)===1&&$stmt->rowCount()!==1)throw new RuntimeException('public_button_fresh_insert_not_confirmed');
+            PostedTelegramPublicButtonLayout::snapshotLocked($this->pdo,$post,$this->telegramSubmissionKey($post),true);
+            PostedTelegramRootedAccess::commit($this->pdo);
             return true;
         }catch(PDOException $exception){
-            if($this->pdo->inTransaction())$this->pdo->rollBack();
+            if($this->pdo->inTransaction())PostedTelegramRootedAccess::rollback($this->pdo);
             if((string)$exception->getCode()!=='23000')throw $exception;
             return false;
         }catch(Throwable $exception){
-            if($this->pdo->inTransaction())$this->pdo->rollBack();
+            if($this->pdo->inTransaction())PostedTelegramRootedAccess::rollback($this->pdo);
             throw $exception;
         }
     }
 
-    private function restoreBlockedPublishClaim(array $post, ?string $error = null): void
+    private function hasRecordedTelegramPublishAttempt(int $postId): bool
     {
-        $status=(string)($post['_claimed_from_status']??'draft');
-        if(!in_array($status,['draft','scheduled','failed'],true))$status='draft';
-        if ($error !== null && str_starts_with($error, 'Лимит ')) $status = 'failed';
-        $this->pdo->prepare(
-            "UPDATE posted_posts
-             SET status=:status,publish_started_at=NULL,
-                 error_text=:error
-             WHERE id=:id AND status='publishing'"
-        )->execute([
-            'status'=>$status,
-            'error'=>$error ?? 'В этом канале уже есть публикация, которую обрабатывает Telegram. Повторная отправка не выполнялась.',
-            'id'=>(int)$post['id'],
-        ]);
+        $query=$this->pdo->prepare('SELECT post_id FROM posted_telegram_publish_attempts WHERE post_id=? LIMIT 1');
+        $query->execute([$postId]);return $query->fetchColumn()!==false;
     }
 
-    private function cancelUnauthorizedTelegramPublishClaim(array $post, string $error): void
+    private function restoreBlockedPublishClaim(array $post,?string $error=null): bool
+    {return$this->telegramAuthorityRestoreClaim($post,$error);}
+
+
+    private function cancelUnauthorizedTelegramPublishClaim(array $post,string $error): bool
     {
-        $postId=(int)($post['id']??0);
-        if($postId<=0)return;
-        $this->pdo->beginTransaction();
-        try{
-            $locked=$this->pdo->prepare(
-                "SELECT status FROM posted_posts WHERE id=:post LIMIT 1 FOR UPDATE"
-            );
-            $locked->execute(['post'=>$postId]);
-            if((string)($locked->fetchColumn()?:'')==='publishing'){
-                $this->refundManagerQuotaForPost($postId);
-                $this->pdo->prepare(
-                    "UPDATE posted_posts
-                     SET status='cancelled',scheduled_at=NULL,publish_started_at=NULL,
-                         repeat_interval_minutes=NULL,repeat_until=NULL,error_text=:error
-                     WHERE id=:post AND status='publishing'"
-                )->execute([
-                    'error'=>mb_substr($error,0,4000),
-                    'post'=>$postId,
-                ]);
-            }
-            $this->pdo->commit();
-        }catch(Throwable $exception){
-            if($this->pdo->inTransaction())$this->pdo->rollBack();
-            throw $exception;
-        }
+        // A revoked editor does not freeze other authors or erase this one's dates.
+        return$this->telegramAuthorityRestoreClaim($post,$error);
     }
+
 
     private function discardTelegramPublishAttempt(int $postId): void
     {
@@ -4820,6 +5219,8 @@ final class PostedBot
 
     private function recoverStalePublishingPosts(): void
     {
+        $typed=$this->pdo->query("SELECT p.* FROM posted_posts p JOIN posted_app_settings s ON s.setting_key=CONCAT('telegram_publish_claim_',p.id) WHERE p.status='publishing' AND p.publish_started_at<NOW()-INTERVAL 15 MINUTE AND NOT EXISTS(SELECT 1 FROM posted_telegram_publish_attempts a WHERE a.post_id=p.id) ORDER BY p.id LIMIT 20");
+        foreach($typed->fetchAll()as$stale){try{$request=PostedTelegramAuthorityPause::recoveryRequest($this->pdo,$stale);if($request!==null)$this->restoreBlockedPublishClaim($request,'Операция остановлена до отправки. Пост и дата сохранены.');}catch(PostedTelegramAuthorityPauseException){/* malformed claim stays held for review */}}
         $this->pdo->exec(
             "DELETE attempt
              FROM posted_telegram_publish_attempts attempt
@@ -4922,6 +5323,7 @@ final class PostedBot
              WHERE status='publishing'
                AND publish_started_at<NOW()-INTERVAL 15 MINUTE
                AND telegram_message_id IS NULL
+               AND NOT EXISTS(SELECT 1 FROM posted_app_settings s WHERE s.setting_key=CONCAT('telegram_publish_claim_',posted_posts.id))
                AND NOT EXISTS (
                     SELECT 1 FROM posted_telegram_publish_attempts attempt
                     WHERE attempt.post_id=posted_posts.id
@@ -5169,11 +5571,17 @@ final class PostedBot
                 if($completed->rowCount()!==1){
                     throw new RuntimeException('Не удалось завершить отмену публикации.');
                 }
+                PostedTelegramTopHold::knownRejectLocked($this->pdo,$postId);
                 $this->refundManagerQuotaForPost($postId);
                 $this->pdo->commit();
                 return 'cancelled';
             }
             if($attemptState==='sending'&&$status==='publishing'){
+                PostedTelegramNativeStore::retireKnownRejectedAttemptLocked($this->pdo,$postId);
+                PostedTelegramCaptionVector::retireKnownRejectedAttemptLocked($this->pdo,$postId);
+                PostedTelegramCaptionPlacement::retireKnownRejectedAttemptLocked($this->pdo,$postId);
+            PostedTelegramTransportLayout::retireKnownRejectedAttemptLocked($this->pdo,$postId);
+            PostedTelegramPublicButtonLayout::retireKnownRejectedAttemptLocked($this->pdo,$postId);
                 $updated=$this->pdo->prepare(
                     "UPDATE posted_posts
                      SET status='failed',publish_started_at=NULL,error_text=:error
@@ -5194,6 +5602,7 @@ final class PostedBot
                 if($discard->rowCount()!==1){
                     throw new RuntimeException('Не удалось снять резерв отклонённой публикации.');
                 }
+                PostedTelegramTopHold::knownRejectLocked($this->pdo,$postId);
                 $this->refundManagerQuotaForPost($postId);
                 $this->pdo->commit();
                 return 'failed';
@@ -5207,6 +5616,7 @@ final class PostedBot
                     'error'=>mb_substr($exception->getMessage(),0,4000),
                     'post'=>$postId,
                 ]);
+                PostedTelegramTopHold::knownRejectLocked($this->pdo,$postId);
                 $this->refundManagerQuotaForPost($postId);
                 $this->pdo->commit();
                 return 'failed';
@@ -5251,6 +5661,11 @@ final class PostedBot
                 $this->pdo->commit();
                 return null;
             }
+            PostedTelegramNativeStore::retireKnownRejectedAttemptLocked($this->pdo,$postId);
+            PostedTelegramCaptionVector::retireKnownRejectedAttemptLocked($this->pdo,$postId);
+                PostedTelegramCaptionPlacement::retireKnownRejectedAttemptLocked($this->pdo,$postId);
+            PostedTelegramTransportLayout::retireKnownRejectedAttemptLocked($this->pdo,$postId);
+            PostedTelegramPublicButtonLayout::retireKnownRejectedAttemptLocked($this->pdo,$postId);
             $updated = $this->pdo->prepare(
                 "UPDATE posted_posts
                  SET status='scheduled',scheduled_at=:retry_at,publish_started_at=NULL,
@@ -5265,6 +5680,7 @@ final class PostedBot
             if ($updated->rowCount() !== 1) {
                 throw new RuntimeException('Не удалось перенести публикацию после ограничения Telegram.');
             }
+            PostedTelegramTopHold::knownRejectLocked($this->pdo,$postId);
             $discard = $this->pdo->prepare(
                 "DELETE FROM posted_telegram_publish_attempts
                  WHERE post_id=:post AND state='sending'"
@@ -5406,23 +5822,48 @@ final class PostedBot
 
     private function publishClaimedPost(array $post, ?int $actorId = null): array
     {
+        if($this->hasRecordedTelegramPublishAttempt((int)$post['id']))return ['state'=>'processing','message_ids'=>[],'message_slots'=>[]];
         try {
+            if((int)($post['repeat_interval_minutes']??0)>0){
+                PostedTelegramPolicy::requireOperator($this->config,(int)($post['author_id']??0),$this->pdo);
+                if($actorId!==null)PostedTelegramPolicy::requireOperator($this->config,$actorId,$this->pdo);
+                PostedTelegramPolicy::requireChannel($this->pdo,$this->config,['id'=>(int)$post['channel_id'],'chat_id'=>(string)$post['chat_id']],'premium');
+            }
+            $post=$this->telegramPolicyPublishPreflight($post,$actorId);
+            $post=PostedTelegramPostOptions::freeze($this->pdo,$post);
+        $post=PostedTelegramTransportLayout::freeze($this->pdo,$post);
+        $post=PostedTelegramPublicButtonLayout::freeze($this->pdo,$post,$this->effectivePostPayload($post));
+            $post=PostedTelegramTopHold::freeze($this->pdo,$post);
             $reserved = $this->reserveTelegramPublishAttempt($post, $actorId);
         } catch (Throwable $exception) {
-            if($exception instanceof PostedPublishAuthorizationException){
-                $this->cancelUnauthorizedTelegramPublishClaim($post,$exception->getMessage());
-                throw new PostedTerminalPublishException(
-                    $exception->getMessage(),
-                    0,
-                    $exception
-                );
+            if($exception instanceof PostedTelegramAlbumPendingException){
+                $notice=$exception->getMessage();$restored=$this->restoreBlockedPublishClaim($post,$notice);return['state'=>$restored?'blocked':'processing','notice'=>$notice,'message_ids'=>[],'message_slots'=>[]];
             }
-            $this->restoreBlockedPublishClaim($post, $exception->getMessage());
+            if($exception instanceof PostedTelegramTopHoldException){
+                $notice=$exception->getMessage();$blocking=$exception->blocking;
+                if(is_array($blocking)){if(!empty($blocking['post_link']))$notice.="\nПост: ".$blocking['post_link'];if(is_int($blocking['unlock_at']??null))$notice.="\nМожно публиковать после ".$this->formatStoredForUser($actorId??(int)$post['author_id'],date('Y-m-d H:i:s',$blocking['unlock_at']),'d.m.Y H:i:s').'.';}
+                $restored=$this->restoreBlockedPublishClaim($post,$notice);return ['state'=>$restored?'blocked':'processing','top_blocked'=>true,'notice'=>$notice,'message_ids'=>[],'message_slots'=>[]];
+            }
+            if($exception instanceof PostedTelegramAuthorityPauseException){
+                $restored=$this->restoreBlockedPublishClaim($post,$exception->getMessage());
+                return ['state'=>$restored?'blocked':'processing','message_ids'=>[],'message_slots'=>[]];
+            }
+            if($exception instanceof PostedTelegramMultipostPreflightException){
+                return $this->telegramMultipostHoldUnreservedClaim($post,$exception);
+            }
+            if($exception instanceof PostedTelegramPolicyException){
+                return $this->telegramPolicyHoldUnreservedClaim($post,$exception,$actorId);
+            }
+            if($exception instanceof PostedPublishAuthorizationException){
+                if(!$this->cancelUnauthorizedTelegramPublishClaim($post,$exception->getMessage()))return ['state'=>'processing','message_ids'=>[],'message_slots'=>[]];
+                return ['state'=>'blocked','message_ids'=>[],'message_slots'=>[]];
+            }
+            if(!$this->restoreBlockedPublishClaim($post, $exception->getMessage())&&$this->hasRecordedTelegramPublishAttempt((int)$post['id']))return ['state'=>'processing','message_ids'=>[],'message_slots'=>[]];
             throw $exception;
         }
         if(!$reserved){
-            $this->restoreBlockedPublishClaim($post);
-            return ['state'=>'blocked','message_ids'=>[],'message_slots'=>[]];
+            $restored=$this->restoreBlockedPublishClaim($post);
+            return ['state'=>$restored?'blocked':'processing','message_ids'=>[],'message_slots'=>[]];
         }
         try{
             $this->validatePostForPublish($post);
@@ -5512,16 +5953,19 @@ final class PostedBot
                     $parts,
                     $continuation,
                     'needs_review',
-                    'Telegram не вернул подтверждение. Повтор отключён: публикация могла быть принята и будет сопоставлена после выхода в канале.'
+                    in_array($post['media_type']??null,['poll','location','contact'],true)?'Telegram не подтвердил результат. Публикация могла быть принята. Автоматический повтор отключён; требуется ручная проверка.':'Telegram не вернул подтверждение. Повтор отключён: публикация могла быть принята и будет сопоставлена после выхода в канале.'
                 );
                 if(!empty($pending['complete'])){
                     $this->finalizeTelegramPublishAttempt((int)$post['id']);
                 }
-                return [
+                return array_merge(in_array($post['media_type']??null,['poll','location','contact'],true)?[
+                    'native_manual_review'=>true,
+                    'notice'=>'Telegram не подтвердил результат. Автоматический повтор отключён; требуется ручная проверка.',
+                ]:[],[
                     'state'=>'processing',
                     'message_ids'=>$persistedIds,
                     'message_slots'=>(array)($pending['slots']??$slots),
-                ];
+                ]);
             }
             if($persistedIds!==[]){
                 $resolved=$this->resolvePartialTelegramFailure(
@@ -5740,6 +6184,8 @@ final class PostedBot
             $matches=[];
             foreach($parts as $index=>$part){
                 if(!is_array($part)||!empty($part['message_id']))continue;
+                if(!empty($part['native_no_reconcile'])||in_array($part['media_type']??null,['poll','location','contact'],true))continue;
+                if(!PostedTelegramCaptionPlacement::matches($part,$incoming))continue;
                 $partMatchKeys=array_values(array_filter(
                     array_map('strval',(array)($part['match_keys']??[$part['match_key']??'']))
                 ));
@@ -5767,6 +6213,10 @@ final class PostedBot
                 if($strictMatch||$fallbackMatch)$matches[]=(int)$index;
             }
             if($matches===[]){
+                $this->pdo->commit();
+                return;
+            }
+            if(str_starts_with((string)($incoming['media_type']??''),'paid_media')&&count($matches)!==1){
                 $this->pdo->commit();
                 return;
             }
@@ -6060,7 +6510,10 @@ final class PostedBot
                 ?date('Y-m-d H:i:s',$publishedTimestamp+$minutes*60)
                 :null;
 
+            $topFinalHint=PostedTelegramTopHold::planningSnapshot($this->pdo,$channelId);
             $this->pdo->beginTransaction();
+            foreach($topFinalHint['channel_ids']as$topFinalId){$finalChannel=$this->pdo->prepare('SELECT id FROM posted_channels WHERE id=? LIMIT 1 FOR UPDATE');$finalChannel->execute([$topFinalId]);if($finalChannel->fetchColumn()===false)throw new RuntimeException('Канал завершённой публикации не найден.');}
+            PostedTelegramTopHold::verifyPlanningLocked($this->pdo,$topFinalHint);
             $stmt=$this->pdo->prepare(
                 "UPDATE posted_posts
                  SET status='sent',telegram_message_id=:first,telegram_message_ids=:ids,
@@ -6083,9 +6536,12 @@ final class PostedBot
                 'telegram_message_id'=>$ids[0],
                 'telegram_message_ids'=>$this->encodeMessageSlots($ids),
             ]);
+            PostedTelegramTopHold::finalizeKnownLocked($this->pdo,$postId);
             $this->createRepeatedPost($fresh);
+            $this->telegramMultipostKnownFullLocked($fresh,['id'=>$channelId,'chat_id'=>(string)$lockedChannel['chat_id']],$slots,true,true);
             $this->completeTelegramAttemptRow($postId);
             $this->pdo->commit();
+            $this->telegramMultipostAfterCommit($postId);
             $this->completeTelegramPinEffect($postId,$fresh,$ids);
             if($delayedTelegramResult){
                 $this->notifyDelayedTelegramResult(
@@ -6124,6 +6580,8 @@ final class PostedBot
     private function telegramPostAuthorityFailureLocked(array $post,array $channel): ?string
     {
         if (!$this->pdo->inTransaction()) throw new RuntimeException('Проверка прав требует транзакцию.');
+        if(!PostedTelegramRootedAccess::channel($this->pdo,$this->config,(int)$post['author_id'],(int)$channel['id']))return 'Доступ автора к этому каналу отозван. Пост сохранён.';
+        if(PostedTelegramAuthorityPause::blocked($this->pdo,$channel,true))return 'Публикации приостановлены; новые части не отправлены. Сохранённые данные требуют проверки.';
         $ownerId=(int)($channel['added_by']??0);
         $authorId=(int)($post['author_id']??0);
         if (empty($channel['is_active']) || $ownerId<=0 || empty($channel['bot_can_post'])) {
@@ -6180,7 +6638,7 @@ final class PostedBot
         ],$slot,(string)$post['chat_id']);
         $encodedSlots=$this->encodeMessageSlots($slots);
 
-        $this->pdo->beginTransaction();
+        PostedTelegramRootedAccess::begin($this->pdo,$this->config);
         try{
             $channelStmt=$this->pdo->prepare('SELECT * FROM posted_channels WHERE id=:channel LIMIT 1 FOR UPDATE');
             $channelStmt->execute(['channel'=>$post['channel_id']]);
@@ -6217,10 +6675,10 @@ final class PostedBot
             if($postStmt->rowCount()!==1){
                 throw new RuntimeException('Ожидающая публикация Telegram уже изменила состояние.');
             }
-            $this->pdo->commit();
+            PostedTelegramRootedAccess::commit($this->pdo);
             return ['slot'=>$slot,'slots'=>$slots,'parts'=>$parts];
         }catch(Throwable $exception){
-            if($this->pdo->inTransaction())$this->pdo->rollBack();
+            if($this->pdo->inTransaction())PostedTelegramRootedAccess::rollback($this->pdo);
             throw $exception;
         }
     }
@@ -6443,6 +6901,7 @@ final class PostedBot
 
     private function completeTelegramAttemptRow(int $postId,bool $skipPin=false):void
     {
+        PostedTelegramTopHold::finalizeKnownLocked($this->pdo,$postId);
         if($skipPin){
             $this->refundManagerQuotaForPost($postId,false,true);
         }
@@ -6475,7 +6934,7 @@ final class PostedBot
         }
         $remotePinAttempted=false;
         try{
-            $this->pdo->beginTransaction();
+            PostedTelegramRootedAccess::begin($this->pdo,$this->config);
             $channelLock=$this->pdo->prepare(
                 'SELECT *
                  FROM posted_channels
@@ -6509,12 +6968,12 @@ final class PostedBot
                 ||(string)($lockedAttempt['state']??'')!=='completed'
                 ||!empty($lockedAttempt['pin_completed_at'])
             ){
-                $this->pdo->commit();
+                PostedTelegramRootedAccess::commit($this->pdo);
                 return;
             }
             if(!empty($lockedAttempt['pin_started_at'])){
                 if(!empty($lockedAttempt['pin_is_fresh'])){
-                    $this->pdo->commit();
+                    PostedTelegramRootedAccess::commit($this->pdo);
                     return;
                 }
                 $this->pdo->prepare(
@@ -6533,8 +6992,11 @@ final class PostedBot
                        AND pin_completed_at IS NULL
                        AND pin_started_at IS NOT NULL"
                 )->execute(['post'=>$postId]);
-                $this->pdo->commit();
+                PostedTelegramRootedAccess::commit($this->pdo);
                 return;
+            }
+            if(is_array($lockedChannel)&&PostedTelegramAuthorityPause::blocked($this->pdo,$lockedChannel,true)){
+                PostedTelegramRootedAccess::commit($this->pdo);return;
             }
             if(
                 !is_array($lockedChannel)
@@ -6544,7 +7006,7 @@ final class PostedBot
                 ||(string)($lockedPost['status']??'')!=='sent'
             ){
                 $this->cancelTelegramPinEffect($postId);
-                $this->pdo->commit();
+                PostedTelegramRootedAccess::commit($this->pdo);
                 return;
             }
             $authorityFailure=$this->telegramPostAuthorityFailureLocked($lockedPost,$lockedChannel);
@@ -6554,7 +7016,7 @@ final class PostedBot
                         ->execute(['error'=>'Пост опубликован, но закреп отменён: '.$authorityFailure,'post'=>$postId]);
                 }
                 $this->cancelTelegramPinEffect($postId);
-                $this->pdo->commit();
+                PostedTelegramRootedAccess::commit($this->pdo);
                 return;
             }
             $post=array_replace($post,$lockedPost,['chat_id'=>(string)$lockedChannel['chat_id']]);
@@ -6564,7 +7026,7 @@ final class PostedBot
                  WHERE post_id=:post AND state=\'completed\'
                    AND pin_completed_at IS NULL'
             )->execute(['post'=>$postId]);
-            $this->pdo->commit();
+            PostedTelegramRootedAccess::commit($this->pdo);
             $newer=$this->pdo->prepare(
                 "SELECT 1
                  FROM posted_telegram_publish_attempts attempt
@@ -6606,7 +7068,7 @@ final class PostedBot
             }
             $this->markTelegramPinEffectCompleted($postId);
         }catch(Throwable $exception){
-            if($this->pdo->inTransaction())$this->pdo->rollBack();
+            if($this->pdo->inTransaction())PostedTelegramRootedAccess::rollback($this->pdo);
             if(!$remotePinAttempted)$this->deferTelegramPinEffect($postId);
             throw $exception;
         }finally{
@@ -6987,6 +7449,50 @@ final class PostedBot
         return [$text,$this->normalizeTelegramEntities($text,$entities)];
     }
 
+    private function telegramPostInlineButtonsAllowed(array $post): bool
+    {
+        // Native forwarding and paid-media delivery retain their existing paths.
+        // Ordinary sendMediaGroup has no reply_markup parameter.
+        return $this->isNativeRepost($post)
+            || count($this->postMedia($post)) < 2
+            || $this->telegramPostOptions($post)['paid_media_stars'] !== null;
+    }
+
+    private function telegramAlbumButtonAction(string $action): bool
+    {
+        return in_array($action, [
+            'buttons','buttons_clear','reactions','hidden','hidden_add',
+            'paintopen','paint','paintbtn','paintrow','paintcol','paintall',
+        ], true);
+    }
+
+    private function handleTelegramAlbumButtonCallback(array $callback): bool
+    {
+        $raw=$callback['data']??null;
+        if(!is_string($raw)||preg_match('/\A(draft|edit):([a-z_]+):([1-9][0-9]{0,18})(?::|\z)/D',$raw,$parts)!==1
+            ||($parts[1]==='draft'?!$this->telegramAlbumButtonAction($parts[2]):$parts[2]!=='buttons'))return false;
+        $actor=$callback['from']['id']??null;$chat=$callback['message']['chat']??null;
+        if(!is_int($actor)||$actor<=0||!is_array($chat)||($chat['type']??null)!=='private'||($chat['id']??null)!==$actor)return true;
+        $post=$this->post((int)$parts[3]);
+        if(!is_array($post)||!$this->canManagePost($actor,(int)$post['id']))return false;
+        if($this->telegramPostInlineButtonsAllowed($post))return false;
+        // This handles only obsolete/forged controls; the current editor never offers them.
+        $this->answerCallback($callback,'Кнопки недоступны для альбомов.');
+        return true;
+    }
+
+    private function handleTelegramAlbumButtonInput(int $actor,string $state,array $data): bool
+    {
+        if(!in_array($state,['await_buttons','await_reactions','await_hidden_label','await_hidden_text','await_edit_buttons'],true))return false;
+        $post=$this->post((int)($data['post_id']??0));
+        if(!is_array($post)||!$this->canManagePost($actor,(int)$post['id'])||$this->telegramPostInlineButtonsAllowed($post))return false;
+        $extra=$state==='await_edit_buttons'?[]:[
+            'reply_markup'=>['inline_keyboard'=>[[['text'=>'← Назад','callback_data'=>'draft:main:'.(int)$post['id']]]]],
+        ];
+        $this->telegram->sendMessage($actor,'Кнопки недоступны для альбомов.',$extra);
+        return true;
+    }
+
     private function effectivePostPayload(array $post): array
     {
         $text = (string) ($post['text'] ?? '');
@@ -7028,12 +7534,17 @@ final class PostedBot
             $options[(int)$post['link_preview_large']===1?'prefer_large_media':'prefer_small_media']=true;
         }
         if(($post['link_preview_above']??null)!==null)$options['show_above_text']=(int)$post['link_preview_above']===1;
+        $custom = $this->telegramCustomPreviewExtra($post);
+        if (isset($custom['link_preview_options']['url'])) {
+            $options['url'] = $custom['link_preview_options']['url'];
+        }
         return ['link_preview_options'=>$options];
     }
 
     private function validatePostForPublish(array $post):void
     {
         if(!empty($post['repost_chat_id'])&&!empty($post['repost_message_id']))return;
+        if(PostedTelegramNativeContent::isKind($post['media_type']??null)){$post=PostedTelegramNativeStore::freeze($this->pdo,$post);if(PostedTelegramNativeStore::behavior($post)===[])throw new InvalidArgumentException('native_content_unavailable');$this->telegramNativeAssertOrdinaryPayload($post,$this->effectivePostPayload($post));return;}
         $payload=$this->effectivePostPayload($post);
         $media=$this->postMedia($post);
         if(trim((string)($payload['text']??''))===''&&$media===[]){
@@ -7084,6 +7595,7 @@ final class PostedBot
     {
         return in_array($action, [
             'convert_copy',
+            'more', // Presentation-only expansion; repost mutation restrictions are unchanged.
             'send',
             'send_confirm',
             'silent',
@@ -7114,6 +7626,10 @@ final class PostedBot
 
     private function publishPost(array $post): array
     {
+        $post=PostedTelegramPostOptions::freeze($this->pdo,$post);
+        $post=PostedTelegramTransportLayout::freeze($this->pdo,$post);
+        $post=PostedTelegramCaptionPlacement::freeze($this->pdo,$post);
+        $post=PostedTelegramPublicButtonLayout::freeze($this->pdo,$post,$this->effectivePostPayload($post));
         $channelId = (int) ($post['channel_id'] ?? 0);
         $channelStatement = $this->pdo->prepare(
             'SELECT chat_id,added_by,is_active,bot_can_post
@@ -7135,14 +7651,18 @@ final class PostedBot
         }
         $payload=$this->effectivePostPayload($post);
         $text=(string)$payload['text'];
+        PostedTelegramCaptionPlacement::assertCaption($post,$text);
         $entities=(array)($payload['entities']??[]);
-        $buttons = $this->buttonsMarkup((array)$payload['buttons']);
+        $buttons = $this->telegramPublicButtonsMarkup($post,(array)$payload['buttons']);
         $chatId = (string) $channel['chat_id'];
         $messageSlots = [];
         $pendingParts = [];
         $continuation = [];
         $buttonExtra = $buttons !== [] ? ['reply_markup'=>['inline_keyboard'=>$buttons]] : [];
-        $sendExtra = !empty($post['silent']) ? ['disable_notification'=>true] : [];
+        $sendExtra = $this->telegramDeliveryExtra($post);
+        $multipostForward=$this->telegramMultipostPublishForward($post);
+        if($multipostForward!==null)return $multipostForward;
+        $this->telegramValidateMediaOptions($post);
         $replyExtra=[];
         if (!empty($post['reply_message_id']) && (string) ($post['reply_chat_id'] ?? '') === $chatId) {
             $replyExtra['reply_parameters']=['message_id'=>(int)$post['reply_message_id']];
@@ -7159,37 +7679,49 @@ final class PostedBot
             $this->appendTelegramSendResult($post,$result,$messageSlots,$pendingParts);
             return $this->telegramPublishOutcome($messageSlots,$pendingParts,$continuation);
         }
+        $native=$this->telegramNativePublish($post,array_merge($sendExtra,$replyExtra,$buttonExtra));if($native!==null)return$native;
         $media = $this->postMedia($post);
         if($text===''&&$media===[]){
             throw new RuntimeException('Нельзя опубликовать пустой пост.');
         }
 
+        $paid=$this->telegramPaidMediaPayload($post,$chatId,$text,$entities,array_merge($sendExtra,$replyExtra,
+            $this->telegramUtf16Length($text)<=self::PHOTO_CAPTION_LIMIT?$buttonExtra:[]));
+        if($paid!==null){
+            $result=$this->telegram->call('sendPaidMedia',$paid);
+            $this->appendTelegramSendResult($post,$result,$messageSlots,$pendingParts);
+            if($this->telegramUtf16Length($text)>self::PHOTO_CAPTION_LIMIT)$continuation=$this->telegramTextContinuation(
+                $this->splitTelegramFormattedText($text,$entities),array_merge($sendExtra,$this->linkPreviewExtra($post)),$buttonExtra);
+            return $this->telegramPublishOutcome($messageSlots,$pendingParts,$continuation);
+        }
+        $spoiler=$this->telegramPostOptions($post)['media_spoiler'];
+
         if (count($media) > 1) {
+            $buttons=[];$buttonExtra=[]; // Ordinary Telegram albums cannot carry inline keyboards.
             if(!$this->isSupportedTelegramMediaGroup($media)){
                 throw new RuntimeException(
                     'Альбом Telegram может содержать фото и видео вместе либо только документы, либо только аудио.'
                 );
             }
-            $caption = $this->telegramUtf16Length($text) <= self::PHOTO_CAPTION_LIMIT ? $text : '';
+            $caption = PostedTelegramTransportLayout::length($post,$text) <= self::PHOTO_CAPTION_LIMIT ? $text : '';
             $group = [];
             foreach ($media as $index => $item) {
                 $entry = ['type' => (string) $item['type'], 'media' => (string) $item['file_id']];
+                if($spoiler&&in_array($item['type'],['photo','video'],true))$entry['has_spoiler']=true;
                 if ($index === 0 && $caption !== '') {
                     $entry['caption'] = $caption;
                     if($entities!==[])$entry['caption_entities']=$entities;
                 }
-                $group[] = $entry;
+                $group[] = PostedTelegramCaptionVector::project($post,$index,$entry);
             }
             $result = $this->telegram->sendMediaGroup($chatId, $group, array_merge($sendExtra, $replyExtra));
             $this->appendTelegramSendResult($post,$result,$messageSlots,$pendingParts);
             if ($caption === '' && $text !== '') {
                 $continuation=$this->telegramTextContinuation(
-                    $this->splitTelegramFormattedText($text,$entities),
+                    $this->splitTelegramFormattedTextForLayout($post,$text,$entities),
                     array_merge($sendExtra,$this->linkPreviewExtra($post)),
                     $buttonExtra
                 );
-            } elseif ($buttons !== []) {
-                $continuation=[['text'=>'‎','extra'=>array_merge($sendExtra,$buttonExtra)]];
             }
             if($pendingParts===[]){
                 $continuation=$this->sendTelegramTextContinuation(
@@ -7202,18 +7734,21 @@ final class PostedBot
         if ($media !== []) {
             $mediaType = (string) $media[0]['type'];
             $fileId = (string) $media[0]['file_id'];
-            if ($text === '' || $this->telegramUtf16Length($text) <= self::PHOTO_CAPTION_LIMIT) {
-                $mediaExtra=array_merge($sendExtra,$replyExtra,$buttonExtra);
+            if ($text === '' || PostedTelegramTransportLayout::length($post,$text) <= self::PHOTO_CAPTION_LIMIT) {
+                $mediaExtra=PostedTelegramCaptionPlacement::project($post,array_merge($sendExtra,$replyExtra,$buttonExtra));
+                if($spoiler&&in_array($mediaType,['photo','video','animation'],true))$mediaExtra['has_spoiler']=true;
                 if($entities!==[])$mediaExtra['caption_entities']=$entities;
                 $result = $this->sendMedia($chatId,$mediaType,$fileId,$text,$mediaExtra);
                 $this->appendTelegramSendResult($post,$result,$messageSlots,$pendingParts);
                 return $this->telegramPublishOutcome($messageSlots,$pendingParts,$continuation);
             }
 
-            $mediaResult = $this->sendMedia($chatId,$mediaType,$fileId,'',array_merge($sendExtra,$replyExtra));
+            $mediaOnlyExtra=array_merge($sendExtra,$replyExtra);
+            if($spoiler&&in_array($mediaType,['photo','video','animation'],true))$mediaOnlyExtra['has_spoiler']=true;
+            $mediaResult = $this->sendMedia($chatId,$mediaType,$fileId,'',$mediaOnlyExtra);
             $this->appendTelegramSendResult($post,$mediaResult,$messageSlots,$pendingParts);
             $continuation=$this->telegramTextContinuation(
-                $this->splitTelegramFormattedText($text,$entities),
+                $this->splitTelegramFormattedTextForLayout($post,$text,$entities),
                 array_merge($sendExtra,$this->linkPreviewExtra($post)),
                 $buttonExtra
             );
@@ -7226,7 +7761,7 @@ final class PostedBot
         }
 
         $continuation=$this->telegramTextContinuation(
-            $this->splitTelegramFormattedText($text,$entities),
+            $this->splitTelegramFormattedTextForLayout($post,$text,$entities),
             array_merge($sendExtra,$this->linkPreviewExtra($post)),
             $buttonExtra,
             $replyExtra
@@ -7263,6 +7798,14 @@ final class PostedBot
                 $part['published_at']=max(1,(int)($message['date']??time()));
                 $part['matched_at']=date('Y-m-d H:i:s');
                 $part['api_confirmed']=true;
+            }
+            if(PostedTelegramCaptionPlacement::enabled($post)){
+                $expected=$this->expectedTelegramPendingParts($post)[$slot]??[];
+                if(!PostedTelegramCaptionPlacement::matches($expected,$part)){
+                    $part['observed_message_id']=$messageId>0?$messageId:null;$part['caption_above']=true;
+                    $part['message_id']=null;$part['published_at']=null;$part['api_confirmed']=false;unset($part['matched_at']);
+                    $messageSlots[$slot]=0;
+                }
             }
             $pendingParts[]=$part;
         }
@@ -7515,7 +8058,7 @@ final class PostedBot
             '',
             $matchText
         );
-        return [
+        $part=[
             'slot'=>max(0,$slot),
             'match_key'=>(string)($matchKeys[0]??$fallbackMatchKey),
             'match_keys'=>$matchKeys,
@@ -7533,6 +8076,7 @@ final class PostedBot
             'update_id'=>null,
             'published_at'=>null,
         ];
+        return PostedTelegramCaptionPlacement::observedPart($message,$part);
     }
 
     private function telegramPendingMatchKey(
@@ -7663,6 +8207,7 @@ final class PostedBot
 
     private function telegramMessageMediaIdentity(array $message):array
     {
+        $paid=$this->telegramPaidMediaIdentity($message);if($paid!==null)return $paid;
         $origin=$message['forward_origin']??null;
         if(is_array($origin)&&$origin!==[]){
             $originType=trim((string)($origin['type']??'unknown'));
@@ -7671,6 +8216,7 @@ final class PostedBot
             $identity='forward:'.$originType.':'.$originChatId.':'.$originMessageId;
             return ['forward',$identity,true,[$identity]];
         }
+        $native=PostedTelegramNativeContent::identity($message);if($native!==null)return$native;
         foreach(['video','animation','document','audio','voice'] as $type){
             $media=$message[$type]??null;
             if(is_array($media)){
@@ -7705,8 +8251,18 @@ final class PostedBot
 
     private function expectedTelegramPendingParts(array $post):array
     {
+        $post=PostedTelegramPostOptions::freeze($this->pdo,$post);
+        $post=PostedTelegramTransportLayout::freeze($this->pdo,$post);
+        $post=PostedTelegramCaptionPlacement::freeze($this->pdo,$post);
+        $post=PostedTelegramPublicButtonLayout::freeze($this->pdo,$post,$this->effectivePostPayload($post));
+        $multipostParts=$this->telegramMultipostForwardParts($post);
+        if($multipostParts!==null)return $multipostParts;
+        $this->telegramValidateMediaOptions($post);
+        $paid=$this->telegramExpectedPaidMediaMessage($post);
+        if($paid!==null)return [$this->telegramPendingPartFromMessage($paid,0,(string)$post['chat_id'])];
         $payload=$this->effectivePostPayload($post);
         $text=(string)$payload['text'];
+        PostedTelegramCaptionPlacement::assertCaption($post,$text);
         $entities=(array)($payload['entities']??[]);
         $chatId=(string)$post['chat_id'];
         $media=$this->postMedia($post);
@@ -7720,8 +8276,9 @@ final class PostedBot
                 'text'=>$forwardedText,
             ],0,$chatId)];
         }
+        $native=$this->telegramNativeExpectedParts($post);if($native!==null)return$native;
         if(count($media)>1){
-            $caption=$this->telegramUtf16Length($text)<=self::PHOTO_CAPTION_LIMIT?$text:'';
+            $caption=PostedTelegramTransportLayout::length($post,$text)<=self::PHOTO_CAPTION_LIMIT?$text:'';
             foreach($media as $index=>$item){
                 $message=[
                     'chat'=>['id'=>$chatId],
@@ -7735,13 +8292,14 @@ final class PostedBot
                     $message['caption']=$caption;
                     $message['caption_entities']=$entities;
                 }
+                $message=PostedTelegramCaptionVector::project($post,$index,$message);
                 $parts[]=$this->telegramPendingPartFromMessage($message,$index,$chatId);
             }
             return $parts;
         }
         if($media!==[]){
             $item=$media[0];
-            $caption=$this->telegramUtf16Length($text)<=self::PHOTO_CAPTION_LIMIT?$text:'';
+            $caption=PostedTelegramTransportLayout::length($post,$text)<=self::PHOTO_CAPTION_LIMIT?$text:'';
             $message=[
                 'chat'=>['id'=>$chatId],
                 (string)$item['type']=>[
@@ -7752,10 +8310,11 @@ final class PostedBot
             ];
             if ($item['type'] === 'photo') $message['photo'] = [$message['photo']];
             if($caption!=='')$message['caption_entities']=$entities;
+            $message=PostedTelegramCaptionPlacement::project($post,$message);
             return [$this->telegramPendingPartFromMessage($message,0,$chatId)];
         }
         if($text!==''){
-            $firstPart=(array)($this->splitTelegramFormattedText($text,$entities)[0]??[]);
+            $firstPart=(array)($this->splitTelegramFormattedTextForLayout($post,$text,$entities)[0]??[]);
             $first=(string)($firstPart['text']??$text);
             return [$this->telegramPendingPartFromMessage([
                 'chat'=>['id'=>$chatId],
@@ -7768,29 +8327,40 @@ final class PostedBot
 
     private function telegramContinuationAfterPendingPrimary(array $post):array
     {
+        $post=PostedTelegramPostOptions::freeze($this->pdo,$post);
+        $post=PostedTelegramTransportLayout::freeze($this->pdo,$post);
+        $post=PostedTelegramPublicButtonLayout::freeze($this->pdo,$post,$this->effectivePostPayload($post));
         if(!empty($post['repost_chat_id'])&&!empty($post['repost_message_id']))return [];
+        if(PostedTelegramNativeContent::isKind($post['media_type']??null))return [];
+        if($this->telegramPostOptions($post)['paid_media_stars']!==null){
+            $payload=$this->effectivePostPayload($post);$text=(string)$payload['text'];
+            if($this->telegramUtf16Length($text)<=self::PHOTO_CAPTION_LIMIT)return [];
+            $buttons=$this->telegramPublicButtonsMarkup($post,(array)$payload['buttons']);
+            return $this->telegramTextContinuation($this->splitTelegramFormattedText($text,(array)$payload['entities']),
+                array_merge($this->telegramDeliveryExtra($post),$this->linkPreviewExtra($post)),
+                $buttons!==[]?['reply_markup'=>['inline_keyboard'=>$buttons]]:[]);
+        }
         $payload=$this->effectivePostPayload($post);
         $text=(string)$payload['text'];
         $entities=(array)($payload['entities']??[]);
-        $buttons=$this->buttonsMarkup((array)$payload['buttons']);
+        $buttons=$this->telegramPublicButtonsMarkup($post,(array)$payload['buttons']);
         $buttonExtra=$buttons!==[]?['reply_markup'=>['inline_keyboard'=>$buttons]]:[];
-        $sendExtra=!empty($post['silent'])?['disable_notification'=>true]:[];
+        $sendExtra=$this->telegramDeliveryExtra($post);
         $media=$this->postMedia($post);
         if(count($media)>1){
-            if($this->telegramUtf16Length($text)>self::PHOTO_CAPTION_LIMIT){
+            $buttonExtra=[];
+            if(PostedTelegramTransportLayout::length($post,$text)>self::PHOTO_CAPTION_LIMIT){
                 return $this->telegramTextContinuation(
-                    $this->splitTelegramFormattedText($text,$entities),
+                    $this->splitTelegramFormattedTextForLayout($post,$text,$entities),
                     array_merge($sendExtra,$this->linkPreviewExtra($post)),
                     $buttonExtra
                 );
             }
-            return $buttons!==[]
-                ? [['text'=>'‎','extra'=>array_merge($sendExtra,$buttonExtra)]]
-                : [];
+            return [];
         }
-        if($media!==[]&&$this->telegramUtf16Length($text)>self::PHOTO_CAPTION_LIMIT){
+        if($media!==[]&&PostedTelegramTransportLayout::length($post,$text)>self::PHOTO_CAPTION_LIMIT){
             return $this->telegramTextContinuation(
-                $this->splitTelegramFormattedText($text,$entities),
+                $this->splitTelegramFormattedTextForLayout($post,$text,$entities),
                 array_merge($sendExtra,$this->linkPreviewExtra($post)),
                 $buttonExtra
             );
@@ -7804,7 +8374,7 @@ final class PostedBot
                 $replyExtra['reply_parameters']=['message_id'=>(int)$post['reply_message_id']];
             }
             $items=$this->telegramTextContinuation(
-                $this->splitTelegramFormattedText($text,$entities),
+                $this->splitTelegramFormattedTextForLayout($post,$text,$entities),
                 array_merge($sendExtra,$this->linkPreviewExtra($post)),
                 $buttonExtra,
                 $replyExtra
@@ -7904,14 +8474,37 @@ final class PostedBot
         if(!$claimed){$this->telegram->sendMessage($userId,'Пост уже публикуется или был обработан.');return;}
         try {
             $outcome=$this->publishClaimedPost($claimed, $userId);
-            $this->telegram->sendMessage($userId,$this->publicationOutcomeMessage($outcome));
         } catch (Throwable $exception) {
             $this->telegram->sendMessage($userId, 'Не удалось отправить: ' . $exception->getMessage());
+            return;
+        }
+        $this->sendTelegramPublicationOutcome($userId,$claimed,$outcome);
+    }
+
+    private function sendTelegramPublicationOutcome(int $userId,array $post,array $outcome,?array $target=null):void
+    {
+        // Publication is already committed. A private UI failure must never imply a resend.
+        try {
+            if((string)($outcome['state']??'')==='sent'){
+                $channel=$this->channel((int)$post['channel_id'])??['title'=>(string)($post['channel_title']??'')];
+                $this->sendOrEditMessage(
+                    $userId,
+                    $this->customEmojiHtml('5260341314095947411','👀').' Пост опубликован в канале '.$this->channelTitleHtml($channel).'.',
+                    ['parse_mode'=>'HTML','reply_markup'=>['inline_keyboard'=>[]]],
+                    $target
+                );
+                return;
+            }
+            $this->telegram->sendMessage($userId,$this->publicationOutcomeMessage($outcome));
+        } catch(Throwable $exception) {
+            error_log('GitPosted could not display a committed publication outcome: '.$exception->getMessage());
         }
     }
 
     private function publicationOutcomeMessage(array $outcome):string
     {
+        if(!empty($outcome['native_manual_review'])&&is_string($outcome['notice']??null))return$outcome['notice'];
+        if(!empty($outcome['policy_blocked'])||!empty($outcome['multipost_blocked'])||!empty($outcome['top_blocked']))return (string)$outcome['notice'];
         return match((string)($outcome['state']??'')){
             'processing'=>'Telegram принял публикацию и обрабатывает медиа. Повторять отправку не нужно: GitPosted сам получит итоговый пост.',
             'retry_scheduled'=>'Telegram временно ограничил частоту запросов. Бот автоматически повторит публикацию позже.',
@@ -8144,8 +8737,9 @@ final class PostedBot
         $this->telegram->sendMessage($userId, 'Пост удалён из контент-плана.');
     }
 
-    private function deleteSentManagedPost(int $userId,array $post,?array $target=null):void
+    private function deleteSentManagedPost(int $userId,array $post,?array $target=null,?array $confirmation=null):void
     {
+        $override=$this->telegramPublicDeleteOverride($post,'manual',$userId,$confirmation);if($override!==null){$this->telegram->sendMessage($userId,$override?'Пост удалён.':'Удаление пока не подтверждено. Журналы сохранены; автоматического повторения нет.');return;}
         $postId=(int)($post['id']??0);
         $channelId=(int)($post['channel_id']??0);
         $pinLockName='gitposted_pin_'.substr(hash('sha256',(string)$channelId),0,32);
@@ -8204,6 +8798,7 @@ final class PostedBot
             if(!$allowed){
                 throw new RuntimeException('Права на удаление поста изменились.');
             }
+            if($confirmation!==null&&!$this->telegramCpDeleteGuardLocked($userId,$lockedPost,$confirmation)){$this->pdo->commit();return;}
             if(!$this->cancelTelegramPinEffect($postId)){
                 throw new RuntimeException(
                     'Закрепление поста ещё завершается. Повторите удаление позже.'
@@ -8643,7 +9238,7 @@ final class PostedBot
         if ($minutes > self::TELEGRAM_MAX_AUTO_DELETE_MINUTES) {
             $this->telegram->sendMessage(
                 $userId,
-                "Telegram разрешает боту удалять публикации только раньше границы 48 часов.\n\nЯ сохраню таймер, но для такого срока потребуется ручное удаление. Бот напомнит об этом через контент-план."
+                'Сохранён срок ручного удаления: '.$this->telegramDeleteTimerLabel($minutes).".\n\n".$this->telegramDeleteTimerHint()
             );
         }
         $this->showManagedPost($userId, $postId);
@@ -8656,11 +9251,20 @@ final class PostedBot
             $userId,
             $postId,
             ['draft','scheduled','failed','sent'],
-            function (array $post) use ($postId, $minutes): bool {
+            function (array $post,array $channel) use ($postId, $minutes): bool {
+                if($minutes>0)PostedTelegramPolicy::requireChannel($this->pdo,$this->config,$channel,'premium');
+                $topOption=PostedTelegramTopHold::load($this->pdo,$post,true);if($minutes>0&&$topOption['enabled']&&$minutes<$topOption['duration_minutes'])throw new PostedTelegramTopHoldException('schedule_conflict');
                 $this->replaceTelegramRepeatIntervalLocked($post,$minutes);
                 return true;
             }
         );
+        } catch (PostedTelegramTopHoldException $exception) {$this->telegram->sendMessage($userId,$exception->getMessage());return;
+        } catch (PostedTelegramPolicyException $exception) {
+            $message=in_array($exception->reason,['invalid_policy','invalid_license','policy_check_unavailable'],true)
+                ?'Настройки доступа или подписки канала требуют проверки администратором.'
+                :"У канала нет премиум-подписки\n\nЧтобы продолжить, приобретите подписку для канала";
+            $this->telegram->sendMessage($userId,$message);
+            return;
         } catch (PostedPublishAuthorizationException $exception) {
             $this->telegram->sendMessage($userId,$exception->getMessage());
             return;
@@ -8675,6 +9279,7 @@ final class PostedBot
     private function replaceTelegramRepeatIntervalLocked(array $post,int $minutes): void
     {
         if (!$this->pdo->inTransaction()) throw new RuntimeException('Изменение повтора требует транзакцию.');
+        $topOption=PostedTelegramTopHold::load($this->pdo,$post,true);if($minutes>0&&$topOption['enabled']&&$minutes<$topOption['duration_minutes'])throw new PostedTelegramTopHoldException('schedule_conflict');
         $postId=(int)$post['id'];
         $rootId=!empty($post['repeat_slot_at'])&&(int)($post['copied_from_id']??0)>0
             ?(int)$post['copied_from_id']:$postId;
@@ -8826,7 +9431,12 @@ final class PostedBot
     {
         $nextAt=$this->nextTelegramRepeatAt($post);
         if ($nextAt===null) return;
-        $this->copyPost($post,(int)$post['channel_id'],(int)$post['author_id'],$nextAt,'scheduled',$nextAt);
+        try{$this->copyPost($post,(int)$post['channel_id'],(int)$post['author_id'],$nextAt,'scheduled',$nextAt);}
+        catch(PostedTelegramTopHoldException$conflict){
+            if(!in_array($conflict->reason,['schedule_conflict','hold_active','delivery_unknown'],true))throw$conflict;
+            $child=$this->copyPost($post,(int)$post['channel_id'],(int)$post['author_id'],$nextAt,'failed',$nextAt);
+            $this->pdo->prepare("UPDATE posted_posts SET error_text=? WHERE id=? AND status='failed'")->execute(['Повтор требует другой даты: конфликт удержания в топе. Отправка не начиналась.',$child]);
+        }
     }
 
     private function nextTelegramRepeatAt(array $post): ?string
@@ -8892,6 +9502,14 @@ final class PostedBot
 
     private function copyPost(array $post, int $channelId, int $authorId, ?string $scheduledAt, string $status, ?string $repeatSlotAt = null): int
     {
+        $ownsOptionsTransaction=!$this->pdo->inTransaction();
+        $topPlanningHint=$ownsOptionsTransaction?PostedTelegramTopHold::planningSnapshot($this->pdo,$channelId):null;
+        if($ownsOptionsTransaction)$this->pdo->beginTransaction();
+        try {
+        if(!$ownsOptionsTransaction)$this->pdo->exec('SAVEPOINT tgh_clone_write');
+        if($topPlanningHint!==null){foreach($topPlanningHint['channel_ids']as$topChannelId){$topLock=$this->pdo->prepare('SELECT id FROM posted_channels WHERE id=? LIMIT 1 FOR UPDATE');$topLock->execute([$topChannelId]);if($topLock->fetchColumn()===false)throw new PostedTelegramTopHoldException('stale_revision');}PostedTelegramTopHold::verifyPlanningLocked($this->pdo,$topPlanningHint);}
+        if((int)($post['id']??0)>0)PostedTelegramAlbumCollector::assertReadyLocked($this->pdo,$post);
+        if(PostedTelegramNativeContent::isKind($post['media_type']??null))PostedTelegramNativeSchema::requireStorageSupported($this->pdo);
         $copiedFromId=(int)($post['id']??0)?:null;
         if($repeatSlotAt!==null&&!empty($post['repeat_slot_at'])){
             $copiedFromId=(int)($post['copied_from_id']??0)?:$copiedFromId;
@@ -8957,13 +9575,20 @@ final class PostedBot
             $buttons=$this->rebindInteractiveButtons($this->decodeJson((string)($post['buttons_json']??'[]')),$postId);
             $this->pdo->prepare('UPDATE posted_posts SET buttons_json=:buttons WHERE id=:id')
                 ->execute(['buttons'=>$buttons!==[]?$this->encodeJson($buttons):null,'id'=>$postId]);
+            PostedTelegramPostOptions::clonePostLocked($this->pdo,$post,['id'=>$postId,'channel_id'=>$channelId]);
+            PostedTelegramTopHold::cloneLocked($this->pdo,$post,['id'=>$postId,'channel_id'=>$channelId]);
+            if($status==='scheduled'&&$scheduledAt!==null){$topChannel=$this->channel($channelId);PostedTelegramTopHold::assertProjectedScheduleLocked($this->pdo,$topChannel,$this->post($postId),$scheduledAt);}
+            $this->telegramMultipostCloneSelectionLocked($post,['id'=>$postId,'channel_id'=>$channelId,'author_id'=>$authorId]);
         }
+        if($ownsOptionsTransaction)$this->pdo->commit();else$this->pdo->exec('RELEASE SAVEPOINT tgh_clone_write');
         return $postId;
+        }catch(Throwable$error){if($ownsOptionsTransaction&&$this->pdo->inTransaction())$this->pdo->rollBack();elseif($this->pdo->inTransaction()){$this->pdo->exec('ROLLBACK TO SAVEPOINT tgh_clone_write');$this->pdo->exec('RELEASE SAVEPOINT tgh_clone_write');}throw$error;}
     }
 
-    private function showMainMenu(int $userId): void
+    private function showMainMenu(int $userId,bool $includeIcons=true): void
     {
         $support = $this->serviceAdminLabel();
+        $newsUsername = $this->serviceNewsUsername();
         $text = $this->customEmojiHtml('5431446665070415240', '✅')
             . " <b>GitPosted</b> - это простой и удобный бот для отложенного постинга, поддерживающий работу с "
             . $this->customEmojiHtml('5258165702707125574', '⭐️')
@@ -8974,11 +9599,18 @@ final class PostedBot
             . $this->customEmojiHtml('5258215635996908355', '👩‍🎨') . " Создавать и настраивать посты любого формата\n"
             . $this->customEmojiHtml('5258420634785947640', '🔄') . " Зацикливать публикации, добавлять кнопки и водяные знаки\n"
             . $this->customEmojiHtml('5260341314095947411', '👀') . " И многое другое\n\n"
+            . ($newsUsername !== '' ? "<b>Новости сервиса -</b> @" . htmlspecialchars($newsUsername, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . "\n" : '')
             . "<b>Поддержка -</b> " . $support;
+        if ($this->telegramUiLanguage($userId) === 'en') {
+            $supportUsername = $this->serviceAdminUsername();
+            $text = PostedTelegramUi::englishHtml('main.body', ['brand'=>'GitPosted']) . "\n\n";
+            if ($newsUsername !== '') $text .= PostedTelegramUi::englishHtml('main.news', ['news'=>'@'.$newsUsername]) . "\n";
+            $text .= PostedTelegramUi::englishHtml('main.support', ['support'=>$supportUsername !== '' ? '@'.$supportUsername : 'контакт владельца пока не указан']);
+        }
         $this->telegram->sendMessage($userId, $text, [
             'parse_mode' => 'HTML',
             'reply_markup' => [
-                'keyboard' => self::MAIN_KEYBOARD,
+                'keyboard' => PostedTelegramUi::mainKeyboard(self::MAIN_KEYBOARD, $this->telegramUiLanguage($userId),$includeIcons),
                 'resize_keyboard' => true,
             ],
         ]);
@@ -9006,11 +9638,14 @@ final class PostedBot
                 $keyboard[]=[['text'=>'📂 '.(string)$folder['title'],'callback_data'=>'post_folder:'.(int)$folder['id']]];
             }
         }
+        $channelButtons=[];
         foreach ($channels as $channel) {
-            $keyboard[] = [['text' => (string) $channel['title'], 'callback_data' => $prefix . ':' . (int) $channel['id']]];
+            $channelButtons[] = ['text' => (string) $channel['title'], 'callback_data' => $prefix . ':' . (int) $channel['id']];
         }
-        $keyboard[] = [['text' => '➕ Добавить новый канал', 'callback_data' => 'settings:add_channel']];
-        $this->sendOrEditMessage($userId, "⬆️ СОЗДАНИЕ ПОСТА\n\nВыберите канал, в котором хотите создать публикацию.", [
+        foreach (array_chunk($channelButtons, 2) as $row) $keyboard[]=$row;
+        $keyboard[] = [['text' => $this->telegramUiText($userId, 'button.add_channel', '➕ Добавить новый канал'), 'callback_data' => 'settings:add_channel']];
+        $this->sendOrEditMessage($userId, $this->telegramUiText($userId, 'create.body', $this->customEmojiHtml('5260652420052032852', '⬆️') . " <b>СОЗДАНИЕ ПОСТА</b>\n\nВыберите канал, в котором хотите создать публикацию."), [
+            'parse_mode' => 'HTML',
             'reply_markup' => ['inline_keyboard' => $keyboard],
         ], $target);
     }
@@ -9033,8 +9668,9 @@ final class PostedBot
             throw new RuntimeException('Выбор рекламной компании требует активной транзакции.');
         }
         $isManager=!empty($permission['is_ad_manager']);
+        $isOwner=$this->channelOwnerId($channelId)===$userId;
         if($requestedCategoryId>0){
-            if(!$isManager){
+            if(!$isManager&&!$isOwner){
                 throw new RuntimeException('Рекламная компания больше недоступна.');
             }
             $category=$this->pdo->prepare(
@@ -9053,6 +9689,9 @@ final class PostedBot
             }
             return $requestedCategoryId;
         }
+        // A transferred owner can retain historical advertising bookkeeping
+        // while creating ordinary owner posts without selecting a quota bucket.
+        if($isOwner)return null;
         if($isManager){
             $category=$this->pdo->prepare(
                 'SELECT id FROM posted_manager_categories
@@ -9069,6 +9708,7 @@ final class PostedBot
 
     private function activeTelegramManagerCategories(int $userId,int $channelId):array
     {
+        if($this->channelOwnerId($channelId)===$userId)return [];
         $stmt=$this->pdo->prepare(
             'SELECT category.* FROM posted_manager_categories category
              INNER JOIN posted_permissions permission
@@ -9140,8 +9780,7 @@ final class PostedBot
 
     private function startPostForChannel(int $userId,int $channelId,?array $target=null): void
     {
-        $stmt=$this->pdo->prepare('SELECT c.* FROM posted_manager_categories c INNER JOIN posted_permissions p ON p.user_id=c.user_id AND p.channel_id=c.channel_id AND p.is_ad_manager=1 WHERE c.user_id=:user AND c.channel_id=:channel AND c.is_active=1 ORDER BY c.id');
-        $stmt->execute(['user'=>$userId,'channel'=>$channelId]);$categories=$stmt->fetchAll();
+        $categories=$this->activeTelegramManagerCategories($userId,$channelId);
         if($categories!==[]){
             $rows=[];foreach($categories as $category){
                 $label=(string)$category['name'].' · '.$this->managerQuotaLabel($category['post_quota_remaining']??null,'постов').' / '.$this->managerQuotaLabel($category['pin_quota_remaining']??null,'закрепов');
@@ -9151,8 +9790,8 @@ final class PostedBot
             $this->sendOrEditMessage($userId,"Выберите рекламную компанию. Лимиты будут списаны именно с неё.",['reply_markup'=>['inline_keyboard'=>$rows]],$target);return;
         }
         $this->setState($userId,'await_post_content',['channel_id'=>$channelId]);
-        $title=(string)($this->channel($channelId)['title']??$this->channelTitle($channelId));
-        $this->sendOrEditMessage($userId,'Отправьте текст, медиа, пересланный пост или ссылку на пост Telegram для канала 📢 '.$title.'.',['reply_markup'=>['inline_keyboard'=>[[['text'=>'← Выбрать другой канал','callback_data'=>'post_channels']]]]],$target);
+        $channel=$this->channel($channelId) ?? ['title'=>$this->channelTitle($channelId)];
+        $this->sendOrEditMessage($userId,'Отправьте боту то, что хотите опубликовать в канале '.$this->channelTitleHtml($channel).'.',['parse_mode'=>'HTML','reply_markup'=>['inline_keyboard'=>[[['text'=>'← Выбрать другой канал','callback_data'=>'post_channels']]]]],$target);
     }
 
     private function showDraftActions(int $userId, int $postId, string $prefixText = '', ?array $target = null): void
@@ -9162,17 +9801,21 @@ final class PostedBot
             $this->telegram->sendMessage($userId, 'Черновик не найден.');
             return;
         }
-        $this->sendDraftPreview($userId, $post, $this->draftMainKeyboard($post), $prefixText, $target);
+        $this->sendDraftPreview($userId, $post, $this->draftMainKeyboard($post, !empty($target['draft_ui_expanded'])), $prefixText, $target);
+        try{$this->telegramUnknownSourceSpoilerNotice($userId,$post);}catch(Throwable$error){error_log('GitPosted spoiler hint unavailable: '.get_class($error));}
     }
 
-    private function draftMainKeyboard(array $post): array
+    private function draftMainKeyboard(array $post, bool $expanded = false): array
     {
         $postId = (int) $post['id'];
         $silentButton = !empty($post['silent']) ? '🔕' : '🔔';
         if ($this->isNativeRepost($post)) {
             $pinButton = !empty($post['pin_after_publish']) ? '✅ Закрепить' : '☑️ Закрепить';
             $keyboard = [];
-            if (!empty($post['import_json'])) {
+            $batchImport=$this->decodeJson((string)($post['import_json']??''));
+            if((array_key_exists('gitposted_multipost_forward',$batchImport)||array_key_exists('gitposted_multipost_forward_fork',$batchImport))&&$this->hasStoredRepostCopy($post)){
+                $keyboard[]=[['text'=>'📝 Сделать копией для редактирования','callback_data'=>'draft:convert_copy:'.$postId]];
+            } elseif (!empty($post['import_json'])) {
                 array_push($keyboard, ...$this->telegramPostLinkDraftRows($post));
             } elseif ($this->hasStoredRepostCopy($post)) {
                 $keyboard[] = [[
@@ -9184,16 +9827,22 @@ final class PostedBot
                 ['text' => $silentButton, 'callback_data' => 'draft:silent:' . $postId . ':' . (empty($post['silent'])?1:0)],
                 ['text' => $pinButton, 'callback_data' => 'draft:pin:' . $postId . ':' . (empty($post['pin_after_publish'])?1:0)],
             ];
+            $keyboard[]=$expanded?[$this->telegramTopHoldPostButton($post,'d')]:[['text'=>'↓ Больше настроек','callback_data'=>'draft:more:'.$postId]];
             $keyboard[] = [
                 ['text' => '← Отменить', 'callback_data' => 'draft:cancel:' . $postId],
                 ['text' => 'Далее →', 'callback_data' => 'draft:next:' . $postId],
             ];
             return $keyboard;
         }
-        $buttons = $this->decodeJson((string) ($post['buttons_json'] ?? '[]'));
+        $nativeKeyboard=$this->telegramNativeDraftKeyboard($post,$expanded);if($nativeKeyboard!==null)return$nativeKeyboard;
+        $buttonsAllowed=$this->telegramPostInlineButtonsAllowed($post);
+        $buttons = $buttonsAllowed?$this->decodeJson((string) ($post['buttons_json'] ?? '[]')):[];
         $isMediaPost = (string) ($post['media_type'] ?? 'none') !== 'none';
-        $textButton = $isMediaPost ? 'Изменить описание' : 'Изменить текст';
+        $textButton = $isMediaPost ? (trim((string)($post['text']??''))===''?'Добавить описание':'Изменить описание') : 'Изменить текст';
         $mediaButton = $isMediaPost ? 'Медиа' : 'Добавить медиа';
+        $previewDetach = $this->telegramPreviewMediaEligible($post) ? $this->telegramPreviewMediaDetachCallback($post) : null;
+        if ($previewDetach !== null) $mediaButton = 'Открепить медиа';
+        $mediaCallback = $previewDetach ?? ('draft:add_media:' . $postId);
         $hasTextUrl =
             preg_match('~https?://\S+~u', (string) ($post['text'] ?? '')) === 1
             ||preg_match(
@@ -9215,15 +9864,17 @@ final class PostedBot
         }
 
         $keyboard = [];
-        if ($hasTextUrl) {
+        if ($hasTextUrl && !$isMediaPost) {
             $keyboard[] = [['text'=>$textButton,'callback_data'=>'draft:edit_text:'.$postId],['text'=>'Превью','callback_data'=>'draft:preview:'.$postId]];
-            $keyboard[] = [['text'=>$mediaButton,'callback_data'=>'draft:add_media:'.$postId]];
+            $keyboard[] = [['text'=>$mediaButton,'callback_data'=>$mediaCallback]];
         } else {
             $keyboard[] = $isMediaPost
-                ?[['text'=>$mediaButton,'callback_data'=>'draft:add_media:'.$postId],['text'=>$textButton,'callback_data'=>'draft:edit_text:'.$postId]]
-                :[['text'=>$textButton,'callback_data'=>'draft:edit_text:'.$postId],['text'=>$mediaButton,'callback_data'=>'draft:add_media:'.$postId]];
+                ?[['text'=>$mediaButton,'callback_data'=>$mediaCallback],['text'=>$textButton,'callback_data'=>'draft:edit_text:'.$postId]]
+                :[['text'=>$textButton,'callback_data'=>'draft:edit_text:'.$postId],['text'=>$mediaButton,'callback_data'=>$mediaCallback]];
         }
-        $keyboard[] = [['text' => $silentButton, 'callback_data' => 'draft:silent:' . $postId . ':' . (empty($post['silent'])?1:0)], ['text' => 'Кнопки', 'callback_data' => 'draft:buttons:' . $postId]];
+        $silentRow=[['text'=>$silentButton,'callback_data'=>'draft:silent:'.$postId.':'.(empty($post['silent'])?1:0)]];
+        if($buttonsAllowed)$silentRow[]=['text'=>'Кнопки','callback_data'=>'draft:buttons:'.$postId];
+        $keyboard[]=$silentRow;
         if ($this->hasInlineButtons($buttons)) {
             $keyboard[] = [['text' => '🎨 Раскрасить кнопки', 'callback_data' => 'draft:paintopen:' . $postId . ':danger']];
         }
@@ -9242,14 +9893,14 @@ final class PostedBot
             $keyboard[] = [['text'=>'Открепить медиа','callback_data'=>'draft:remove_media:'.$postId]];
         }
         array_push($keyboard, ...$this->telegramPostLinkDraftRows($post));
+        $keyboard[]=[$this->telegramTopHoldPostButton($post,'d')];
         $keyboard[] = [['text' => '← Отменить', 'callback_data' => 'draft:cancel:' . $postId], ['text' => 'Далее →', 'callback_data' => 'draft:next:' . $postId]];
-        return $keyboard;
+        return $this->telegramDraftEditorKeyboard($post, $keyboard, $expanded);
     }
 
     private function showDraftMoreSettings(int $userId, int $postId, ?array $target = null): void
     {
-        // Keep callbacks from older keyboards usable after flattening the menu.
-        $this->showDraftActions($userId, $postId, '', $target);
+        $this->showTelegramDraftMoreSettings($userId, $postId, $target);
     }
 
     private function publicationPlanSource(int $userId, int $postId): ?array
@@ -9551,15 +10202,19 @@ final class PostedBot
             if (!isset($slots[$index])) return;
             $slot=$slots[$index];
             $text.='Экземпляр '.($index+1).' · '.$this->formatStoredForUser($userId,$slot['at'],'d.m.Y H:i')
-                ."\nЗакреп: ".(!empty($slot['pin'])?'да':'нет')."\nУдаление: ".$this->minutesLabel((int)$slot['delete']);
-            if ((int)$slot['delete']>self::TELEGRAM_MAX_AUTO_DELETE_MINUTES) $text.="\nДля срока от 48 часов Telegram потребует ручное удаление; бот напомнит.";
+                ."\nЗакреп: ".(!empty($slot['pin'])?'да':'нет')."\nУдаление: ".$this->telegramDeleteTimerLabel((int)$slot['delete']);
+            $text.="\n\n".$this->telegramDeleteTimerHint();
             if ($mode==='slot_time') $text.="\n\nОтправьте новую дату и время: ДД.ММ.ГГГГ ЧЧ:ММ.";
             if ($mode==='slot_delete') $text.="\n\nОтправьте срок: 6 — часов, 6:30, 2д или «нет».";
             $keyboard[]=[$button((empty($slot['pin'])?'☑️':'✅').' Закрепить','pin',(string)$index)];
             $keyboard[]=[$button('Изменить дату и время','slot_time',(string)$index)];
             foreach ([[0,60,360],[720,1440,2875]] as $values) {
                 $row=[];
-                foreach ($values as $value) $row[]=$button($this->minutesLabel($value),'timer',$index.':'.$value);
+                foreach ($values as $value) {
+                    $timerButton=$button($this->telegramDeleteTimerLabel($value),'timer',$index.':'.$value);
+                    if($this->normalizeTelegramDeleteTimerMinutes((int)$slot['delete'])===$value)$timerButton['style']='primary';
+                    $row[]=$timerButton;
+                }
                 $keyboard[]=$row;
             }
             $keyboard[]=[$button('Другой срок удаления','slot_delete',(string)$index)];
@@ -9574,7 +10229,7 @@ final class PostedBot
                     :'Создаются только дополнительные экземпляры; исходный пост и его повтор сохраняются.');
             foreach (array_slice($slots,$page*6,6,true) as $index=>$slot) {
                 $label=($index+1).'. '.$this->formatStoredForUser($userId,$slot['at'],'d.m.Y H:i')
-                    .' · '.(!empty($slot['pin'])?'📌':'без закрепа').' · 🗑 '.$this->minutesLabel((int)$slot['delete']);
+                    .' · '.(!empty($slot['pin'])?'📌':'без закрепа').' · 🗑 '.$this->telegramDeleteTimerLabel((int)$slot['delete']);
                 $keyboard[]=[$button($label,'slot',(string)$index)];
             }
             $navigation=[];
@@ -9671,6 +10326,7 @@ final class PostedBot
                         $copy['pin_after_publish']=(int)$slot['pin'];
                         $copy['delete_after_minutes']=(int)$slot['delete']>0?(int)$slot['delete']:null;
                         if ($sourceIsDraft && $index===0) {
+                            PostedTelegramTopHold::assertProjectedScheduleLocked($this->pdo,$this->channel((int)$source['channel_id']),$source,$slot['at']);
                             $stmt=$this->pdo->prepare(
                                 "UPDATE posted_posts SET status='scheduled',scheduled_at=:at,
                                  pin_after_publish=:pin,delete_after_minutes=:minutes,
@@ -9708,15 +10364,12 @@ final class PostedBot
             return;
         }
 
-        $this->sendOrEditMessage($userId, '💼 НАСТРОЙКИ ОТПРАВКИ' . "\n\n" . 'Пост готов к публикации в канале ' . (string) ($post['channel_title'] ?? '') . '.', [
-            'reply_markup' => ['inline_keyboard' => [
-                [['text' => 'Таймер удаления: ' . mb_strtolower($this->minutesLabel((int) ($post['delete_after_minutes'] ?? 0))), 'callback_data' => 'draft:delete_timer:' . $postId]],
-                [['text' => 'Автоповтор: ' . mb_strtolower($this->minutesLabel((int) ($post['repeat_interval_minutes'] ?? 0))), 'callback_data' => 'draft:repeat_timer:' . $postId]],
-                [['text' => '📅 Серия публикаций', 'callback_data' => 'series:open:' . $postId]],
-                [['text' => '⏰ Отложить', 'callback_data' => 'draft:schedule:' . $postId], ['text' => '🔥 Опубликовать', 'callback_data' => 'draft:send:' . $postId]],
-                [['text' => '← Назад', 'callback_data' => 'draft:cancel_timer:' . $postId]],
-            ]],
-        ], $target);
+        $sendChannel=$this->channel((int)$post['channel_id'])??['title'=>(string)($post['channel_title']??'')];
+        $view=$this->telegramDraftSettingsPanelView($post,$sendChannel);
+        if(PostedTelegramNativeContent::isKind($post['media_type']??null)){$controls=(array)($view['extra']['reply_markup']['inline_keyboard']??[]);$panel=$view;$panel['extra']=$view['extra'];unset($panel['extra']['reply_markup']);$this->sendTelegramNativePreview($userId,$post,$controls,'',$panel);return;}
+        $bound=$this->showTelegramDraftBoundSettings($userId,$postId,$target,$view['text'],$view['extra']);
+        if($bound!==null)return;
+        $this->sendOrEditMessage($userId,$view['text'],$view['extra'],$target);
     }
 
     private function showDraftPreviewSettings(int $userId,int $postId,?array $target=null):void
@@ -9863,6 +10516,7 @@ final class PostedBot
             $postId,
             ['draft'],
             function (array $post) use ($postId, $style, $marker): bool {
+                if(!$this->telegramPostInlineButtonsAllowed($post))return false;
                 $buttons = $this->decodeJson((string) ($post['buttons_json'] ?? '[]'));
                 $marker($buttons);
                 foreach ($buttons as $rowIndex => $row) {
@@ -9902,18 +10556,18 @@ final class PostedBot
         if(!$post||(string)$post['status']!=='draft')return;
         $this->setState($userId,'await_delete_timer',['post_id'=>$postId]);
         $p = 'draft:setdelete:' . $postId . ':';
-        $selected=(int)($post['delete_after_minutes']??0);
-        $button=static function(string $text,int $minutes,string $callback)use($selected):array{
-            $result=['text'=>$text,'callback_data'=>$callback];
+        $selected=$this->normalizeTelegramDeleteTimerMinutes((int)($post['delete_after_minutes']??0));
+        $button=function(int $minutes,string $callback)use($selected):array{
+            $result=['text'=>$this->telegramDeleteTimerLabel($minutes),'callback_data'=>$callback];
             if($selected===$minutes)$result['style']='primary';
             return $result;
         };
-        $this->sendOrEditMessage($userId, "🗑 ТАЙМЕР УДАЛЕНИЯ\n\nВы можете установить через какое время после выхода поста, он будет удалён.\n\nОтправьте боту время, через которое нужно удалить пост либо выберите один из предложенных вариантов.\n\n6 - удалить через 6 ч\n6:30 - удалить через 6 ч 30 мин\n6 30 - удалить через 6 ч 30 мин\n10д - удалить через 10 дней", [
+        $this->sendOrEditMessage($userId, "🗑 ТАЙМЕР УДАЛЕНИЯ\n\nВыберите срок после публикации или отправьте его сообщением.\n\n".$this->telegramDeleteTimerHint()."\n\n6 — через 6 ч\n6:30 или 6 30 — через 6 ч 30 мин\n2д — автоудаление ≈48 ч\n10д — напоминание удалить вручную через 10 дней", [
             'reply_markup' => ['inline_keyboard' => [
-                [$button('Нет',0,$p.'0'),$button('5 мин',5,$p.'5'),$button('15 мин',15,$p.'15'),$button('30 мин',30,$p.'30')],
-                [$button('1 ч',60,$p.'60'),$button('2 ч',120,$p.'120'),$button('4 ч',240,$p.'240'),$button('6 ч',360,$p.'360')],
-                [$button('12 ч',720,$p.'720'),$button('18 ч',1080,$p.'1080'),$button('24 ч',1440,$p.'1440'),$button('≈48 ч',self::TELEGRAM_MAX_AUTO_DELETE_MINUTES,$p.(string)self::TELEGRAM_MAX_AUTO_DELETE_MINUTES)],
-                [$button('3 д',4320,$p.'4320'),$button('5 д',7200,$p.'7200'),$button('7 д',10080,$p.'10080'),['text'=>'👁️','callback_data'=>'draft:delete_custom:'.$postId]],
+                [$button(0,$p.'0'),$button(5,$p.'5'),$button(15,$p.'15'),$button(30,$p.'30')],
+                [$button(60,$p.'60'),$button(120,$p.'120'),$button(240,$p.'240'),$button(360,$p.'360')],
+                [$button(720,$p.'720'),$button(1080,$p.'1080'),$button(1440,$p.'1440'),$button(self::TELEGRAM_MAX_AUTO_DELETE_MINUTES,$p.(string)self::TELEGRAM_MAX_AUTO_DELETE_MINUTES)],
+                [$button(4320,$p.'4320'),$button(7200,$p.'7200'),$button(10080,$p.'10080'),['text'=>'👁️','callback_data'=>'draft:delete_custom:'.$postId]],
                 [['text'=>(!empty($post['delete_report_enabled'])?'✅️':'☑️').' Прислать отчёт об удалении','callback_data'=>'draft:delete_report:'.$postId.':'.(empty($post['delete_report_enabled'])?1:0)]],
                 [['text' => '← Назад', 'callback_data' => 'draft:cancel_timer:' . $postId]],
             ]],
@@ -9961,11 +10615,14 @@ final class PostedBot
 
     private function setDraftRepeat(int $userId, int $postId, int $minutes, ?array $target = null): void
     {
+        try {
         $updated = $this->withTelegramManagedPostLock(
             $userId,
             $postId,
             ['draft'],
-            function () use ($postId, $minutes): bool {
+            function (array $post,array $channel) use ($postId, $minutes): bool {
+                if($minutes>0)PostedTelegramPolicy::requireChannel($this->pdo,$this->config,$channel,'premium');
+                $topOption=PostedTelegramTopHold::load($this->pdo,$post,true);if($minutes>0&&$topOption['enabled']&&$minutes<$topOption['duration_minutes'])throw new PostedTelegramTopHoldException('schedule_conflict');
                 $this->pdo->prepare(
                     "UPDATE posted_posts SET repeat_interval_minutes=:minutes
                      WHERE id=:id AND status='draft'"
@@ -9976,6 +10633,14 @@ final class PostedBot
                 return true;
             }
         );
+        } catch (PostedTelegramTopHoldException $exception) {$this->telegram->sendMessage($userId,$exception->getMessage());return;
+        } catch (PostedTelegramPolicyException $exception) {
+            $message=in_array($exception->reason,['invalid_policy','invalid_license','policy_check_unavailable'],true)
+                ?'Настройки доступа или подписки канала требуют проверки администратором.'
+                :"У канала нет премиум-подписки\n\nЧтобы продолжить, приобретите подписку для канала";
+            $this->telegram->sendMessage($userId,$message);
+            return;
+        }
         if ($updated !== true) {
             $this->telegram->sendMessage($userId, 'Нет доступа к посту.');
             return;
@@ -9986,28 +10651,32 @@ final class PostedBot
     private function showContentPlanChannels(int $userId, ?array $target = null): void
     {
         $channels = $this->allowedChannels($userId, 'post');
-        if ($channels === []) {
+        $pausedEntry=$this->telegramAuthorityPauseEntryButton($userId,'cp');
+        if ($channels === [] && $pausedEntry===null) {
             $this->telegram->sendMessage($userId, 'Нет доступных каналов.');
             return;
         }
 
-        if (count($channels) === 1) {
+        if (count($channels) === 1 && $pausedEntry===null) {
             $this->showContentPlanForChannel($userId,(int)$channels[0]['id'],$this->todayForUser($userId),false,$target,false);
             return;
         }
 
         $keyboard = [];
+        $channelButtons=[];
         foreach ($channels as $channel) {
-            $keyboard[] = [[
+            $channelButtons[] = [
                 'text' => (string) $channel['title'],
                 'callback_data'=>'cp:channel:'.(int)$channel['id'].':'.$this->todayForUser($userId),
-            ]];
+            ];
         }
+        foreach (array_chunk($channelButtons, 2) as $row) $keyboard[]=$row;
 
+        if($pausedEntry!==null)$keyboard[]=[$pausedEntry];
         $this->sendOrEditMessage(
             $userId,
-            $this->customEmojiHtml('5258105663359294787', '🗓')
-                . " <b>КОНТЕНТ-ПЛАН</b>\n\nВ этом разделе вы можете просматривать и изменять запланированные публикации. Выберите канал, в котором хотите увидеть контент-план.",
+            $this->telegramUiText($userId, 'content.body', $this->customEmojiHtml('5258105663359294787', '🗓')
+                . " <b>КОНТЕНТ-ПЛАН</b>\n\nВ этом разделе вы можете просматривать и изменять запланированные публикации. Выберите канал, в котором хотите увидеть контент-план."),
             [
                 'parse_mode' => 'HTML',
                 'reply_markup' => ['inline_keyboard' => $keyboard],
@@ -10031,15 +10700,16 @@ final class PostedBot
         $lines = [$this->customEmojiHtml('5258105663359294787', '🗓') . ' <b>КОНТЕНТ-ПЛАН</b>', ''];
         $lines[] = count($posts) === 0
             ? 'На <b>' . $humanDate . '</b> в канале ' . $channelTitle . ' не запланировано ни одного поста.'
-            : 'На <b>' . $humanDate . '</b> в канале ' . $channelTitle . ' запланировано ' . $this->pluralRu(count($posts), 'пост', 'поста', 'постов') . '.';
+            : 'На <b>' . $humanDate . '</b> в канале ' . $channelTitle . ' ' . PostedTelegramContentPlanUi::scheduledPhrase(count($posts)) . '.';
 
-        $keyboard = [];
+        $postButtons = [];
         foreach ($posts as $post) {
-            $keyboard[] = [[
+            $postButtons[] = [
                 'text'=>$this->postPlanButtonTitle($userId,$post),
                 'callback_data' => 'cp:post:' . (int) $post['id'],
-            ]];
+            ];
         }
+        $keyboard=PostedTelegramContentPlanUi::postRows($postButtons,PostedTelegramContentPlanUi::compact($this->user($userId)??[]));
 
         if ($calendar) {
             $keyboard=array_merge($keyboard,$this->calendarKeyboardForChannel($userId,$channelId,$date));
@@ -10077,13 +10747,13 @@ final class PostedBot
         $lines = [$this->customEmojiHtml('5258105663359294787', '🗓') . ' <b>КОНТЕНТ-ПЛАН</b>', ''];
         $lines[] = 'На <b>' . htmlspecialchars($this->humanDate($date), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</b> запланировано ' . $this->pluralRu(count($posts), 'пост', 'поста', 'постов') . '.';
         foreach ($posts as $post) {
-            $time=$post['scheduled_at']?$this->formatStoredForUser($userId,(string)$post['scheduled_at'],'H:i'):'--:--';
+            $time=$this->contentPlanRowTime($userId,$post);
             $lines[] = htmlspecialchars($time . ' ' . $this->postShortTitle($post), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
         }
 
         $keyboard = [];
         foreach ($posts as $post) {
-            $time=$post['scheduled_at']?$this->formatStoredForUser($userId,(string)$post['scheduled_at'],'H:i'):'--:--';
+            $time=$this->contentPlanRowTime($userId,$post);
             $keyboard[] = [[
                 'text' => $time . ' ' . $this->postShortTitle($post),
                 'callback_data' => 'cp:post:' . (int) $post['id'],
@@ -10113,77 +10783,7 @@ final class PostedBot
 
     private function showEmojiCatalogV2(int $userId, string $category = 'quality', int $page = 1, ?array $target = null, bool $showFilters = false): void
     {
-        $categories = $this->emojiCategories();
-        if (!isset($categories[$category])) {
-            $category = 'quality';
-        }
-
-        $items = $this->emojiCatalog()[$category] ?? [];
-        $perPage = 10;
-        $totalPages = max(1, (int) ceil(count($items) / $perPage));
-        $page = min(max(1, $page), $totalPages);
-        $pageItems = array_slice($items, ($page - 1) * $perPage, $perPage);
-
-        $lines = [$this->customEmojiHtml('5258328383183396223', '📖') . ' <b>КАТАЛОГ ЭМОДЗИ</b>'];
-        if ($pageItems === []) {
-            $lines[] = '';
-            $lines[] = 'В этой категории пока нет наборов.';
-        } else {
-            foreach ($pageItems as $item) {
-                $details = $this->emojiSetDetails($item);
-                $lines[] = '';
-                $lines[] = $details['preview_html']
-                    . '  <a href="' . htmlspecialchars((string) $item['url'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '">Открыть</a> [' . (int) $details['count'] . ']';
-            }
-        }
-
-        $keyboard = [];
-        $categoryButtons = [];
-        foreach ($categories as $key => $title) {
-            $categoryButton = [
-                'text' => $title,
-                'callback_data' => 'emoji:' . $key . ':1' . ($showFilters ? ':more' : ''),
-            ];
-            if ($key === $category) { $categoryButton['style'] = 'primary'; }
-            $categoryButtons[] = $categoryButton;
-        }
-        foreach (array_chunk($categoryButtons, 2) as $row) {
-            $keyboard[] = $row;
-        }
-
-        if ($showFilters) {
-            $keyboard[] = [[
-                'text' => 'Тип: любые',
-                'callback_data' => 'emoji:' . $category . ':' . $page . ':more',
-            ]];
-            $keyboard[] = [[
-                'text' => '❔ Адаптивные',
-                'callback_data' => 'emoji:' . $category . ':' . $page . ':more',
-            ]];
-            $keyboard[] = [[
-                'text' => '❔ Большие наборы',
-                'callback_data' => 'emoji:' . $category . ':' . $page . ':more',
-            ]];
-        } else {
-            $keyboard[] = [[
-                'text' => '↓ Больше фильтров',
-                'callback_data' => 'emoji:' . $category . ':' . $page . ':more',
-            ]];
-        }
-
-        $prevPage = $page > 1 ? $page - 1 : $totalPages;
-        $nextPage = $page < $totalPages ? $page + 1 : 1;
-        $moreSuffix = $showFilters ? ':more' : '';
-        $keyboard[] = [
-            ['text' => '<', 'callback_data' => 'emoji:' . $category . ':' . $prevPage . $moreSuffix],
-            ['text' => $page . ' / ' . $totalPages, 'callback_data' => 'emoji:' . $category . ':' . $page . $moreSuffix],
-            ['text' => '>', 'callback_data' => 'emoji:' . $category . ':' . $nextPage . $moreSuffix],
-        ];
-
-        $this->sendOrEditMessage($userId, implode("\n", $lines), [
-            'parse_mode' => 'HTML',
-            'reply_markup' => ['inline_keyboard' => $keyboard],
-        ], $target);
+        $this->renderTelegramEmojiCatalog($userId, $category, $page, $target, $showFilters);
     }
 
     private function showEmojiCatalog(int $userId, string $category = 'quality', int $page = 1): void
@@ -10253,6 +10853,10 @@ final class PostedBot
     {
         $parts = explode(':', $data);
         $action = (string) ($parts[1] ?? '');
+        if($action==='edit'){
+            if(preg_match('/\Acp:edit:([1-9][0-9]{0,18})\z/D',$data,$editMatch)!==1||(string)(int)$editMatch[1]!==$editMatch[1])return;
+            $this->openContentPlanPublishedEditor($userId,(int)$editMatch[1]);return;
+        }
         if ($action === 'channel') {
             $this->showContentPlanForChannel($userId, (int) ($parts[2] ?? 0), (string) ($parts[3] ?? ''), false, $target);
             return;
@@ -10417,13 +11021,22 @@ final class PostedBot
             return;
         }
 
-        $this->sendPostPreview($userId, $post);
+        $albumDetail=$this->telegramAlbumPanelDetailEligible($userId,$post);
+        $cpDetail=null;
+        if(!$albumDetail){
+            $cpDetail=$this->telegramCpDetailBegin($userId,$post);if($cpDetail===false)return;
+            try{if($cpDetail===null)$this->sendPostPreview($userId,$post);else$this->telegramCpDetailDispatch($cpDetail);}
+            catch(Throwable$e){if(is_array($cpDetail)){try{$this->telegramCpDetailStoreOutcome($cpDetail['record'],null,false,true);}catch(Throwable){}}throw$e;}
+        }
         $date=$post['scheduled_at']?$this->formatStoredForUser($userId,(string)$post['scheduled_at'],'Y-m-d'):$this->todayForUser($userId);
+        if((string)$post['status']==='sent')$date=PostedTelegramContentPlanUi::date($post,$this->storageTimezone(),$this->userTimezoneObject($userId),true)?->format('Y-m-d')??$date;
+        $timerLabel=(string)$post['status']==='sent'&&(int)($post['delete_after_minutes']??0)<=0?'нет':$this->telegramDeleteTimerLabel((int)($post['delete_after_minutes']??0));
         $keyboard = [
             [['text' => 'Дублировать', 'callback_data' => 'cp:dup:' . $postId]],
-            [['text' => 'Таймер удаления: ' . $this->minutesLabel((int) ($post['delete_after_minutes'] ?? 0)), 'callback_data' => 'cp:timer:' . $postId]],
+            [['text' => 'Таймер удаления: ' . $timerLabel, 'callback_data' => 'cp:timer:' . $postId]],
             [['text' => 'Автоповтор: ' . $this->minutesLabel((int) ($post['repeat_interval_minutes'] ?? 0)), 'callback_data' => 'cp:repeat:' . $postId]],
         ];
+        if((string)$post['status']==='sent'&&$this->can($userId,(int)$post['channel_id'],'manage_posts')&&($this->isSingleMessageEditableTelegramPost($post)||$this->telegramPublishedAlbumEditable($post)))$keyboard[0][]=['text'=>'Изменить','callback_data'=>'cp:edit:'.$postId];
         if (in_array((string)$post['status'], ['draft','scheduled','failed','sent'], true)) {
             $keyboard[] = [['text'=>'📅 Серия публикаций','callback_data'=>'series:open:'.$postId]];
         }
@@ -10439,10 +11052,15 @@ final class PostedBot
             $keyboard[0][] = ['text' => 'Изменить дату', 'callback_data' => 'cp:dateedit:' . $postId . ':' . $date];
             $keyboard[] = [['text' => 'Опубликовать', 'callback_data' => 'cp:pub:' . $postId], ['text' => 'Удалить', 'callback_data' => 'cp:del:' . $postId]];
         }
+        $keyboard[]=[['text'=>'↓ Больше настроек','callback_data'=>'top:more:'.$postId.':m']];
         $keyboard[]=[['text'=>'← Назад','callback_data'=>'cp:cdate:'.(int)$post['channel_id'].':'.$date]];
-        $this->telegram->sendMessage($userId,$this->managedPostControlText($userId,$post),[
-            'reply_markup' => ['inline_keyboard' => $keyboard],
-        ]);
+        $control=(string)$post['status']==='sent'?$this->contentPlanPublishedDetail($userId,$post):['text'=>$this->managedPostControlText($userId,$post)];
+        $controlExtra=['reply_markup'=>['inline_keyboard'=>$keyboard]];
+        if(isset($control['entities']))$controlExtra['entities']=$control['entities'];
+        if($albumDetail){$this->renderTelegramPublishedAlbumDetail($userId,$postId,$control,$controlExtra);return;}
+        if(is_array($cpDetail))$this->telegramCpDetailBeforeControl($cpDetail['record']);
+        try{$cpControl=$this->telegram->sendMessage($userId,$control['text'],$controlExtra);if(is_array($cpDetail))$this->telegramCpDetailControlObserved($cpDetail['record'],$cpControl,$control,$controlExtra);}
+        catch(Throwable$e){if(is_array($cpDetail)){try{$this->telegramCpDetailStoreOutcome($cpDetail['record'],null,false,true);}catch(Throwable){}}throw$e;}
     }
 
     private function showDeleteTimerMenu(int $userId, int $postId): void
@@ -10451,8 +11069,9 @@ final class PostedBot
             $this->telegram->sendMessage($userId, 'Нет доступа к посту.');
             return;
         }
-        $this->telegram->sendMessage($userId, "Таймер удаления\n\nВыберите, через какое время после публикации удалить пост.", [
-            'reply_markup' => ['inline_keyboard' => $this->minutesKeyboard('cp:settimer:' . $postId . ':', [0, 5, 15, 30, 60, 120, 240, 360, 720, 1080, 1440, self::TELEGRAM_MAX_AUTO_DELETE_MINUTES, 4320, 7200, 10080], 'cp:post:' . $postId)],
+        $post=$this->post($postId);
+        $this->telegram->sendMessage($userId, "Таймер удаления\n\nВыберите срок после публикации.\n\n".$this->telegramDeleteTimerHint(), [
+            'reply_markup' => ['inline_keyboard' => $this->telegramDeleteTimerKeyboard('cp:settimer:' . $postId . ':', [0, 5, 15, 30, 60, 120, 240, 360, 720, 1080, 1440, self::TELEGRAM_MAX_AUTO_DELETE_MINUTES, 4320, 7200, 10080], 'cp:post:' . $postId, (int)($post['delete_after_minutes']??0))],
         ]);
     }
 
@@ -10471,18 +11090,20 @@ final class PostedBot
     {
         $channels = $this->allowedChannels($userId, 'post');
         $keyboard = [];
+        $channelButtons=[];
         foreach ($channels as $channel) {
-            $keyboard[] = [[
+            $channelButtons[] = [
                 'text' => (string) $channel['title'],
                 'callback_data' => 'tpl_scope:' . (int) $channel['id'],
-            ]];
+            ];
         }
-        $keyboard[] = [['text' => 'Общие', 'callback_data' => 'tpl_scope:0']];
+        foreach (array_chunk($channelButtons, 2) as $row) $keyboard[]=$row;
+        $keyboard[] = [['text' => $this->telegramUiText($userId, 'button.common', 'Общие'), 'callback_data' => 'tpl_scope:0']];
 
         $this->telegram->sendMessage(
             $userId,
-            $this->customEmojiHtml('5296348778012361146', '🏷')
-                . " <b>ШАБЛОНЫ</b>\n\nСохраняйте заготовки для постов или рекламных креативов.\n\nВыберите для какого канала вы хотите просмотреть шаблоны либо нажмите <b>«Общие»</b>.",
+            $this->telegramUiText($userId, 'templates.body', $this->customEmojiHtml('5296348778012361146', '🏷')
+                . " <b>ШАБЛОНЫ</b>\n\nСохраняйте заготовки для постов или рекламных креативов.\n\nВыберите для какого канала вы хотите просмотреть шаблоны либо нажмите <b>«Общие»</b>."),
             [
                 'parse_mode' => 'HTML',
                 'reply_markup' => ['inline_keyboard' => $keyboard],
@@ -10501,7 +11122,7 @@ final class PostedBot
         $keyboard = [];
         foreach ($templates as $template) {
             $keyboard[] = [[
-                'text' => (string) $template['title'],
+                'text' => $this->telegramTemplateListLabel($template),
                 'callback_data' => 'tpl_view:' . (int) $template['id'],
             ]];
         }
@@ -10509,14 +11130,22 @@ final class PostedBot
         $keyboard[] = [['text' => '← Назад', 'callback_data' => 'tpl_root']];
 
         $scopeTitle = $scopeId > 0 ? $this->channelTitle($scopeId) : 'Общие';
-        $text = "🏷 ШАБЛОНЫ\n\nСохраняйте заготовки для постов или рекламных креативов.\n\n";
+        $scopeTitleHtml = htmlspecialchars($scopeTitle, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
         if ($scopeId > 0) {
-            $text .= 'Выберите шаблон для канала ' . $scopeTitle . ' или создайте новый.';
+            $scopeChannel = $this->channel($scopeId);
+            if (is_array($scopeChannel)) {
+                $scopeChannel['title'] = $scopeTitle;
+                $scopeTitleHtml = $this->channelTitleHtml($scopeChannel);
+            }
+        }
+        $text = $this->customEmojiHtml('5296348778012361146', '🏷') . " <b>ШАБЛОНЫ</b>\n\nСохраняйте заготовки для постов или рекламных креативов.\n\n";
+        if ($scopeId > 0) {
+            $text .= 'Выберите шаблон для канала ' . $scopeTitleHtml . ' или создайте новый.';
         } else {
             $text .= 'Выберите шаблон или создайте новый.';
         }
 
-        $this->telegram->sendMessage($userId, $text, ['reply_markup' => ['inline_keyboard' => $keyboard]]);
+        $this->telegram->sendMessage($userId, $text, ['parse_mode' => 'HTML', 'reply_markup' => ['inline_keyboard' => $keyboard]]);
     }
 
     private function startTemplateCreate(int $userId, int $scopeId): void
@@ -10548,15 +11177,21 @@ final class PostedBot
             $this->telegram->sendMessage($userId, 'Владение каналом в Telegram больше не подтверждено.');
             return;
         }
+        if(array_key_exists('show_caption_above_media',$message)&&$message['show_caption_above_media']!==false){try{$placementInput=$this->contentFromMessage($message);PostedTelegramCaptionPlacement::input($message,$placementInput);}catch(Throwable$placementError){$this->telegram->sendMessage($userId,$placementError->getMessage());return;}}
+        if($this->createTelegramNativeTemplateFromMessage($userId,$scopeId,$message,$expectedStateData))return;
         $content = $this->contentFromMessage($message);
+        try{$captionAbove=PostedTelegramCaptionPlacement::input($message,$content);}catch(InvalidArgumentException$e){$this->telegram->sendMessage($userId,$e->getMessage());return;}
         if ($content['text'] === '' && $content['media_file_id'] === null) {
             $this->telegram->sendMessage($userId, 'Нужен текст либо поддерживаемое медиа с подписью.');
             return;
         }
         $ownsTransaction = !$this->pdo->inTransaction();
-        if ($ownsTransaction) $this->pdo->beginTransaction();
+        if ($ownsTransaction) PostedTelegramRootedAccess::begin($this->pdo,$this->config);
         $templateId = 0;
+        $templateCollecting = false;
         try {
+            PostedTelegramPolicy::requireOperator($this->config,$userId,$this->pdo);
+            if($scopeId>0)PostedTelegramRootedAccess::requireChannel($this->pdo,$this->config,$userId,$scopeId);
             if ($scopeId > 0) {
                 $channel = $this->pdo->prepare(
                     'SELECT id FROM posted_channels WHERE id=:channel AND is_active=1
@@ -10564,14 +11199,14 @@ final class PostedBot
                 );
                 $channel->execute(['channel'=>$scopeId]);
                 if ($channel->fetchColumn() === false) {
-                    if ($ownsTransaction) $this->pdo->commit();
+                    if ($ownsTransaction) PostedTelegramRootedAccess::commit($this->pdo);
                     return;
                 }
             }
             // Match transfer's actor -> owner-range order, including an empty
             // range whose gap lock cannot serialize concurrent inserts.
             if (!$this->lockActiveTelegramActor($userId)) {
-                if ($ownsTransaction) $this->pdo->commit();
+                if ($ownsTransaction) PostedTelegramRootedAccess::commit($this->pdo);
                 return;
             }
             $range = $this->pdo->prepare('SELECT id FROM posted_templates WHERE owner_id=:owner ORDER BY id FOR UPDATE');
@@ -10584,14 +11219,14 @@ final class PostedBot
             );
             $current->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
             if ($current->fetchColumn() === false) {
-                if ($ownsTransaction) $this->pdo->commit();
+                if ($ownsTransaction) PostedTelegramRootedAccess::commit($this->pdo);
                 return;
             }
             if ($scopeId > 0) {
                 $permission=$this->pdo->prepare('SELECT can_post FROM posted_permissions WHERE user_id=:user AND channel_id=:channel LIMIT 1 FOR UPDATE');
                 $permission->execute(['user'=>$userId,'channel'=>$scopeId]);
                 if ((int) ($permission->fetchColumn() ?: 0) !== 1) {
-                    if ($ownsTransaction) $this->pdo->commit();
+                    if ($ownsTransaction) PostedTelegramRootedAccess::commit($this->pdo);
                     return;
                 }
             }
@@ -10609,23 +11244,37 @@ final class PostedBot
                 'media_type'=>$content['media_type'],'media_file_id'=>$content['media_file_id'],
             ]);
             $templateId=(int)$this->pdo->lastInsertId();
-            $this->pdo->prepare("UPDATE posted_users SET state=NULL,state_data=NULL WHERE telegram_id=:user AND state='await_template_content' AND state_data <=> CAST(:data AS JSON)")
+            $createdQuery=$this->pdo->prepare('SELECT * FROM posted_templates WHERE id=? AND owner_id=? LIMIT 1 FOR UPDATE');$createdQuery->execute([$templateId,$userId]);$newTemplate=$createdQuery->fetch();
+            if(!is_array($newTemplate))throw new RuntimeException('Новый шаблон не найден.');
+            $draftToken=$expectedStateData['input_token']??null;if(!is_string($draftToken)||preg_match('/\A[a-f0-9]{24}\z/D',$draftToken)!==1)$draftToken=bin2hex(random_bytes(12));
+            PostedTelegramTemplateMedia::saveLocked($this->pdo,$newTemplate,$content['media'],false,$draftToken);
+            $placementTemplate=PostedTelegramTemplateMedia::hydrate($this->pdo,$newTemplate);PostedTelegramCaptionPlacement::captureLocked($this->pdo,$placementTemplate,$captionAbove,'t');
+            $templateExpected=$this->telegramTemplateIngress??['state'=>'await_template_content','state_data'=>$this->encodeJson($expectedStateData)];
+            $templateCollecting=$this->registerTelegramTemplateAlbumLocked($userId,$newTemplate,$message,$templateExpected);
+            if(!empty($content['media_spoiler'])){
+                $createdTemplate=$this->pdo->prepare('SELECT * FROM posted_templates WHERE id=? LIMIT 1');$createdTemplate->execute([$templateId]);$created=$createdTemplate->fetch();
+                if(!is_array($created))throw new RuntimeException('Новый шаблон не найден.');
+                PostedTelegramPostOptions::saveTemplateLocked($this->pdo,$created,['media_spoiler'=>true]);
+            }
+            if(!$templateCollecting)$this->pdo->prepare("UPDATE posted_users SET state=NULL,state_data=NULL WHERE telegram_id=:user AND state='await_template_content' AND state_data <=> CAST(:data AS JSON)")
                 ->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
-            if ($ownsTransaction) $this->pdo->commit();
+            if ($ownsTransaction) PostedTelegramRootedAccess::commit($this->pdo);
         } catch (Throwable $exception) {
-            if ($ownsTransaction && $this->pdo->inTransaction()) $this->pdo->rollBack();
+            if ($ownsTransaction && $this->pdo->inTransaction()) PostedTelegramRootedAccess::rollback($this->pdo);
             throw $exception;
         }
         if ($templateId <= 0) return;
-        $this->showTemplateEditor($userId,$templateId);
+        if(!$templateCollecting)$this->showTemplateEditor($userId,$templateId);
     }
 
     private function showTemplateEditor(int $userId,int $templateId):void
     {
+        if($this->showTelegramTemplatePendingStatus($userId,$templateId))return;
         $template=$this->ownedTemplate($userId,$templateId);
         if(!$template)return;
-        $text=trim((string)($template['text']??''));
-        if($text==='')$text='Медиа-шаблон';
+        if($this->telegramTemplateUsesVectorUi($template)){$this->renderTelegramTemplateMedia($userId,$templateId);return;}
+        $text=(string)($template['text']??'');
+        if(trim($text)==='')$text='Медиа-шаблон';
         $keyboard=$this->buttonsMarkup($this->decodeJson((string)($template['buttons_json']??'[]')));
         $keyboard=array_merge($keyboard,[
             [['text'=>'Изменить текст','callback_data'=>'tpl_edit_text:'.$templateId]],
@@ -10634,6 +11283,7 @@ final class PostedBot
             [['text'=>'← Отменить','callback_data'=>'tpl_cancel:'.$templateId],['text'=>'Готово →','callback_data'=>'tpl_done:'.$templateId]],
         ]);
         $extra=['reply_markup'=>['inline_keyboard'=>$keyboard]];
+        if($this->telegramTemplateMediaPreview($userId,$template,$text,$extra))return;
         $mediaType=(string)($template['media_type']??'none');
         $fileId=(string)($template['media_file_id']??'');
         if($mediaType!=='none'&&$fileId!==''){
@@ -10643,7 +11293,7 @@ final class PostedBot
                 $text,
                 $this->decodeJson((string)($template['text_entities_json']??''))
             );
-            if($this->telegramUtf16Length($text)<=self::PHOTO_CAPTION_LIMIT){
+            if(PostedTelegramTransportLayout::characters($text)<=self::PHOTO_CAPTION_LIMIT){
                 $captionExtra=$extra;
                 if($entities!==[])$captionExtra['caption_entities']=$entities;
                 $this->telegram->call(
@@ -10653,7 +11303,7 @@ final class PostedBot
                 return;
             }
             $this->telegram->call($method,['chat_id'=>(string)$userId,$field=>$fileId]);
-            $parts=$this->splitTelegramFormattedText($text,$entities);
+            $parts=$this->splitTelegramScalarFormattedText($text,$entities);
             foreach($parts as $index=>$part){
                 $partExtra=[];
                 if((array)($part['entities']??[])!==[]){
@@ -10670,6 +11320,7 @@ final class PostedBot
             }
             return;
         }
+        $plainEntities=$this->normalizeTelegramEntities($text,$this->decodeJson((string)($template['text_entities_json']??'')));if($plainEntities!==[])$extra['entities']=$plainEntities;
         $this->telegram->sendMessage($userId,$text,$extra);
     }
 
@@ -10677,7 +11328,7 @@ final class PostedBot
     {
         $stmt=$this->pdo->prepare('SELECT * FROM posted_templates WHERE id=:id AND owner_id=:owner LIMIT 1');
         $stmt->execute(['id'=>$templateId,'owner'=>$userId]);
-        $row=$stmt->fetch();return is_array($row)?$row:null;
+        $row=$stmt->fetch();if(is_array($row)&&(int)($row['channel_id']??0)>0&&!PostedTelegramRootedAccess::channel($this->pdo,$this->config,$userId,(int)$row['channel_id']))return null;return is_array($row)?PostedTelegramTemplateMedia::hydrate($this->pdo,$row):null;
     }
 
     private function startTemplateEditInput(int $userId,int $templateId,string $state,string $prompt):void
@@ -10689,57 +11340,22 @@ final class PostedBot
 
     private function updateTemplateDraft(int $userId,int $templateId,string $state,array $message):void
     {
-        if(!$this->ownedTemplate($userId,$templateId)){$this->clearState($userId);return;}
-        $content=$this->contentFromMessage($message);
-        if($state==='await_template_edit_buttons'){
-            $this->pdo->prepare('UPDATE posted_templates SET buttons_json=:buttons WHERE id=:id AND owner_id=:owner')->execute(['buttons'=>$this->encodeJson($this->parseButtons((string)($message['text']??''))),'id'=>$templateId,'owner'=>$userId]);
-        }elseif($state==='await_template_edit_text'){
-            if($content['text']==='')return;
-            $this->pdo->prepare('UPDATE posted_templates SET text=:text,text_entities_json=:entities,title=:title WHERE id=:id AND owner_id=:owner')->execute(['text'=>$content['text'],'entities'=>$content['text_entities']!==[]?$this->encodeJson($content['text_entities']):null,'title'=>$this->templateTitle($content['text'],(string)($content['media_type']??'none')),'id'=>$templateId,'owner'=>$userId]);
-        }else{
-            if($content['media_file_id']===null)return;
-            $hasCaption=trim((string)$content['text'])!=='';
-            $this->pdo->prepare(
-                'UPDATE posted_templates
-                 SET media_type=:type,media_file_id=:file,
-                     text=IF(:has_caption=1,:text,text),
-                     text_entities_json=IF(:has_entities=1,:entities,IF(:has_caption2=1,NULL,text_entities_json)),
-                     title=IF(:has_caption3=1,:title,title)
-                 WHERE id=:id AND owner_id=:owner'
-            )->execute([
-                'type'=>$content['media_type'],
-                'file'=>$content['media_file_id'],
-                'has_caption'=>$hasCaption?1:0,
-                'text'=>$content['text'],
-                'has_entities'=>$hasCaption&&$content['text_entities']!==[]?1:0,
-                'entities'=>$hasCaption&&$content['text_entities']!==[]
-                    ?$this->encodeJson($content['text_entities'])
-                    :null,
-                'has_caption2'=>$hasCaption?1:0,
-                'has_caption3'=>$hasCaption?1:0,
-                'title'=>$this->templateTitle($content['text'],$content['media_type']),
-                'id'=>$templateId,
-                'owner'=>$userId,
-            ]);
-        }
-        $this->clearState($userId);$this->showTemplateEditor($userId,$templateId);
+        $this->updateTelegramTemplateMediaDraft($userId,$templateId,$state,$message);
     }
 
     private function finishTemplateEdit(int $userId,int $templateId):void
     {
-        $template=$this->ownedTemplate($userId,$templateId);if(!$template)return;
-        $this->clearState($userId);$this->showTemplateList($userId,(int)($template['channel_id']??0));
+        $this->finishTelegramTemplateMedia($userId,$templateId);
     }
 
     private function cancelTemplateEdit(int $userId,int $templateId):void
     {
-        $template=$this->ownedTemplate($userId,$templateId);if(!$template)return;
-        $this->pdo->prepare('DELETE FROM posted_templates WHERE id=:id AND owner_id=:owner')->execute(['id'=>$templateId,'owner'=>$userId]);
-        $this->clearState($userId);$this->showTemplateList($userId,(int)($template['channel_id']??0));
+        $this->deleteTelegramTemplateMedia($userId,$templateId,true);
     }
 
     private function showTemplateView(int $userId, int $templateId): void
     {
+        if($this->showTelegramTemplatePendingStatus($userId,$templateId))return;
         $template = $this->template($templateId);
         if (!$template || (int) $template['owner_id'] !== $userId) {
             $this->telegram->sendMessage($userId, 'Шаблон не найден.');
@@ -10751,6 +11367,8 @@ final class PostedBot
             $this->telegram->sendMessage($userId, 'Нет доступа к шаблону этого канала.');
             return;
         }
+
+        if($this->telegramTemplateUsesVectorUi($template)){$saved=PostedTelegramTemplateMedia::load($this->pdo,$template)['saved'];$this->renderTelegramTemplateMedia($userId,$templateId,$saved?'view':'editor');return;}
 
         $prefix = "Шаблон: " . (string) $template['title'] . "\n";
         $prefix .= 'Раздел: ' . ($scopeId > 0 ? $this->channelTitle($scopeId) : 'Общие') . "\n\n";
@@ -10765,7 +11383,7 @@ final class PostedBot
                 $this->telegramUtf16Length($prefix)
             )
             :[];
-        foreach ($this->splitTelegramFormattedText($summary,$entities) as $part) {
+        foreach ($this->splitTelegramScalarFormattedText($summary,$entities) as $part) {
             $extra=[];
             if((array)($part['entities']??[])!==[]){
                 $extra['entities']=(array)$part['entities'];
@@ -10836,6 +11454,11 @@ final class PostedBot
                 $channelId,
                 'post',
                 function (array $_channel,array $permission) use ($channelId,$userId,$template,$managerCategoryId): int {
+                    $templateQuery=$this->pdo->prepare('SELECT * FROM posted_templates WHERE id=? AND owner_id=? LIMIT 1 FOR UPDATE');$templateQuery->execute([(int)$template['id'],$userId]);$currentTemplate=$templateQuery->fetch();
+                    if(!is_array($currentTemplate))throw new RuntimeException('Template ownership changed.');
+                    $template=PostedTelegramTemplateMedia::hydrate($this->pdo,$currentTemplate);PostedTelegramTemplateMedia::assertReady($this->pdo,$template);
+                    if(!PostedTelegramTemplateMedia::load($this->pdo,$template,true)['saved'])throw new RuntimeException('Сначала сохраните шаблон.');
+                    if(PostedTelegramNativeContent::isKind($template['media_type']??null))PostedTelegramNativeSchema::requireStorageSupported($this->pdo);
                     $resolvedCategoryId=$this->resolveTelegramManagerCategoryLocked(
                         $userId,
                         $channelId,
@@ -10845,10 +11468,10 @@ final class PostedBot
                     $stmt = $this->pdo->prepare(
                         "INSERT INTO posted_posts
                             (channel_id,author_id,text,text_entities_json,autosignature_text,autosignature_entities_json,
-                             media_type,media_file_id,buttons_json,status,
+                             media_type,media_file_id,media_json,buttons_json,status,
                              silent,pin_after_publish,comments_enabled,link_preview_enabled,link_preview_large,link_preview_above,manager_category_id)
                          SELECT c.id,:author_id,:text,:text_entities_json,c.post_autosignature,
-                                c.post_autosignature_entities_json,:media_type,:media_file_id,:buttons_json,'draft',
+                                c.post_autosignature_entities_json,:media_type,:media_file_id,:media_json,:buttons_json,'draft',
                                 c.post_silent,c.post_pin,c.post_comments,c.post_preview,c.post_preview_large,c.post_preview_above,:manager_category_id
                          FROM posted_channels c
                          WHERE c.id=:channel_id AND c.is_active=1
@@ -10861,6 +11484,7 @@ final class PostedBot
                         'text_entities_json' => $template['text_entities_json'] ?? null,
                         'media_type' => (string) ($template['media_type'] ?? 'none'),
                         'media_file_id' => $template['media_file_id'] ?? null,
+                        'media_json' => $template['media_json'],
                         'buttons_json' => $template['buttons_json'] ?? null,
                         'manager_category_id'=>$resolvedCategoryId,
                     ]);
@@ -10870,6 +11494,9 @@ final class PostedBot
                     }
                     $post = $this->post($postId);
                     if (is_array($post)) {
+                        $currentTemplate=$this->template((int)$template['id']);
+                        if(!$currentTemplate||(int)$currentTemplate['owner_id']!==$userId)throw new RuntimeException('Template ownership changed.');
+                        PostedTelegramPostOptions::cloneTemplateToPostLocked($this->pdo,$currentTemplate,$post);
                         $buttons = $this->rebindInteractiveButtons(
                             $this->decodeJson((string) ($post['buttons_json'] ?? '[]')),
                             $postId
@@ -10893,17 +11520,9 @@ final class PostedBot
         $this->showDraftActions($userId,$postId,'Черновик создан из шаблона.');
     }
 
-    private function deleteTemplate(int $userId, int $templateId): void
+    private function deleteTemplate(int $userId,int $templateId):void
     {
-        $template = $this->template($templateId);
-        if (!$template || (int) $template['owner_id'] !== $userId) {
-            $this->telegram->sendMessage($userId, 'Шаблон не найден.');
-            return;
-        }
-        $scopeId = (int) ($template['channel_id'] ?? 0);
-        $this->pdo->prepare('DELETE FROM posted_templates WHERE id = :id AND owner_id = :owner')
-            ->execute(['id' => $templateId, 'owner' => $userId]);
-        $this->showTemplateList($userId, $scopeId);
+        $this->deleteTelegramTemplateMedia($userId,$templateId);
     }
 
     private function startAddChannel(int $userId, ?array $target = null): void
@@ -10914,47 +11533,107 @@ final class PostedBot
             "Чтобы подключить канал:\n\n"
             . "1. Сделайте @" . $this->botUsername() . " администратором, дав следующие права:\n\n"
             . "✓ Отправка сообщений\n✓ Удаление сообщений\n✓ Редактирование сообщений\n\n"
-            . "2. Перешлите в диалог с ботом любое сообщение из канала.",
+            . "2. Отправьте ссылку https://t.me/username, @username или числовой ID канала (например, -1001234567890). Также можно переслать любое сообщение из канала.\n\n"
+            . "Для закрытого канала используйте ID или пересланное сообщение: пригласительная ссылка не подходит.\n\n"
+            . ($this->telegramSubscriptionPaid()?'':"GitPosted бесплатный — подписка для подключения и работы с каналом не нужна."),
             ['reply_markup' => ['inline_keyboard' => [[['text' => '← Назад', 'callback_data' => 'settings:root']]]]],
             $target
         );
     }
 
+    private function telegramChannelRegistrationId(mixed $value): ?string
+    {
+        if (!is_int($value) && !is_string($value)) return null;
+        $id=(string)$value;
+        if (preg_match('/^-[1-9][0-9]{0,18}$/D',$id)!==1) return null;
+        $absolute=substr($id,1);
+        if (strlen($absolute)>19 || (strlen($absolute)===19 && strcmp($absolute,'9223372036854775808')>0)) return null;
+        return $id;
+    }
+
+    private function telegramChannelRegistrationReference(array $message): ?string
+    {
+        // A genuine forwarded channel origin identifies the channel even when
+        // the forwarded post's body contains a link to somewhere else.
+        $origin=$this->forwardedChannelOrigin($message);
+        if ($origin!==null) return $this->telegramChannelRegistrationId($origin['chat_id']);
+        if (!isset($message['text']) || !is_string($message['text'])) return null;
+        $text=trim($message['text']);
+        if ($text==='' || strlen($text)>256) return null;
+        $id=$this->telegramChannelRegistrationId($text);
+        if ($id!==null) return $id;
+        if (preg_match('/^@([A-Za-z][A-Za-z0-9_]{3,31})$/D',$text,$match)===1) return '@'.$match[1];
+        if (preg_match('~^(?:https?://)?t\\.me/([A-Za-z][A-Za-z0-9_]{3,31})/?$~iD',$text,$match)!==1) return null;
+        if (in_array(strtolower($match[1]),['joinchat','addstickers','addemoji','share','proxy','socks','iv','login','confirmphone','setlanguage'],true)) return null;
+        return '@'.$match[1];
+    }
+
+    private function telegramChannelRegistrationUsernameMatches(array $chat,string $requested): bool
+    {
+        $names=[];
+        if (is_string($chat['username']??null)) $names[]=$chat['username'];
+        // A channel may resolve through an active additional username, while
+        // its primary username is different or absent in ChatFullInfo.
+        if (is_array($chat['active_usernames']??null)) $names=[...$names,...$chat['active_usernames']];
+        foreach ($names as $name) {
+            if (is_string($name) && preg_match('/^[A-Za-z][A-Za-z0-9_]{3,31}$/D',$name)===1
+                && strcasecmp($requested,$name)===0) return true;
+        }
+        return false;
+    }
+
     private function registerChannelFromMessage(int $userId, array $message, array $expectedStateData): void
     {
+        if(!PostedTelegramRootedAccess::canConnect($this->pdo,$this->config,$userId))throw new RuntimeException('Администратор не разрешил подключать собственные каналы.');
         $current = $this->pdo->prepare(
             "SELECT telegram_id FROM posted_users WHERE telegram_id=:user AND is_active=1
                AND state='await_channel_ref' AND state_data <=> CAST(:data AS JSON) LIMIT 1"
         );
         $current->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
         if ($current->fetchColumn() === false) return;
-        $origin = $this->forwardedChannelOrigin($message);
-        if ($origin === null) {
-            $this->telegram->sendMessage($userId, 'Перешлите боту любое сообщение из канала, который хотите подключить.');
+        $chatRef=$this->telegramChannelRegistrationReference($message);
+        if ($chatRef===null) {
+            $this->telegram->sendMessage($userId, 'Отправьте ссылку вида https://t.me/username, @username, числовой ID канала со знаком минус или пересланное сообщение из канала. Для закрытого канала нужны ID или пересланное сообщение; пригласительная ссылка не подходит.');
             return;
         }
-        $chatRef = (string)$origin['chat_id'];
 
         try {
+            if(!PostedTelegramRootedAccess::canConnect($this->pdo,$this->config,$userId))throw new RuntimeException('Право подключения каналов отозвано.');
             $chatResult = $this->telegram->call('getChat', ['chat_id' => $chatRef]);
             $chat = (array) ($chatResult['result'] ?? []);
         } catch (Throwable $exception) {
-            $this->telegram->sendMessage($userId, 'Не удалось найти канал. Проверьте, что бот уже добавлен администратором: ' . $exception->getMessage());
+            $this->telegram->sendMessage($userId, 'Не удалось найти канал. Проверьте ссылку или ID и убедитесь, что бот уже добавлен администратором.');
             return;
         }
-        $chatId = (string) ($chat['id'] ?? '');
-        if ($chatId === '') { $this->telegram->sendMessage($userId, 'Telegram не вернул ID канала.'); return; }
+        $chatId=$this->telegramChannelRegistrationId($chat['id']??null);
+        if (($chatResult['ok']??null)!==true || ($chat['type']??null)!=='channel' || $chatId===null) {
+            $this->telegram->sendMessage($userId, 'Telegram не подтвердил канал. Отправьте ссылку, @username или ID именно канала; личные аккаунты и группы не подходят.');
+            return;
+        }
+        if (($chatRef[0]==='@' && !$this->telegramChannelRegistrationUsernameMatches($chat,ltrim($chatRef,'@')))
+            || ($chatRef[0]!=='@' && $chatRef!==$chatId)) {
+            $this->telegram->sendMessage($userId, 'Telegram вернул другой канал. Проверьте ссылку или ID и попробуйте подключить канал заново.');
+            return;
+        }
 
+        $registrationProofStarted=hrtime(true);
         try {
             $me = $this->telegram->call('getMe');
-            $botId = (int) ($me['result']['id'] ?? 0);
+            $botIdentity=$me['result']??null;
+            if (($me['ok']??null)!==true || !is_array($botIdentity) || !is_int($botIdentity['id']??null)
+                || $botIdentity['id']<=0 || ($botIdentity['is_bot']??null)!==true) {
+                $this->telegram->sendMessage($userId,'Telegram не подтвердил личность бота. Попробуйте подключить канал позже.');
+                return;
+            }
+            $botId=$botIdentity['id'];
             $botResult = $this->telegram->call('getChatMember', ['chat_id'=>$chatId,'user_id'=>$botId]);
             $bot = (array) ($botResult['result'] ?? []);
             $status = (string) ($bot['status'] ?? '');
-            $canPost = !empty($bot['can_post_messages']) ? 1 : 0;
-            $canEdit = !empty($bot['can_edit_messages']) ? 1 : 0;
-            $canDelete = !empty($bot['can_delete_messages']) ? 1 : 0;
-            if ($status !== 'administrator' || !$canPost || !$canEdit || !$canDelete) {
+            $canPost = ($bot['can_post_messages']??null)===true ? 1 : 0;
+            $canEdit = ($bot['can_edit_messages']??null)===true ? 1 : 0;
+            $canDelete = ($bot['can_delete_messages']??null)===true ? 1 : 0;
+            if (($botResult['ok']??null)!==true || ($bot['user']['id']??null)!==$botId || ($bot['user']['is_bot']??null)!==true
+                || $status !== 'administrator' || !$canPost || !$canEdit || !$canDelete) {
                 $this->telegram->sendMessage($userId, 'Боту нужны права администратора на отправку, редактирование и удаление сообщений. Выдайте все три права и попробуйте снова.');
                 return;
             }
@@ -10962,15 +11641,21 @@ final class PostedBot
             $member=(array)($memberResult['result']??[]);
             $memberStatus=(string)($member['status']??'');
         } catch (Throwable $exception) {
-            $this->telegram->sendMessage($userId,'Не удалось проверить права в канале: '.$exception->getMessage());
+            $this->telegram->sendMessage($userId,'Не удалось проверить права в канале. Проверьте права бота и повторите подключение позже.');
             return;
         }
         $existing=$this->channelByChatId($chatId);
         $existingOwner = is_array($existing) ? (int) ($existing['added_by'] ?? 0) : 0;
+        $existingPause=is_array($existing)?PostedTelegramAuthorityPause::read($this->pdo,$existing):null;
+        $closedReconnect=is_array($existing)&&$existingOwner<=0&&($existingPause['phase']??null)==='closed_explicitly';
+        if(is_array($existing)&&!$closedReconnect&&PostedTelegramAuthorityPause::blocked($this->pdo,$existing)){
+            $this->telegram->sendMessage($userId,'Канал приостановлен. Посты, даты и повторы сохранены. Откройте сохранённые публикации и проверьте права перед возобновлением.',['reply_markup'=>['inline_keyboard'=>[[['text'=>'Проверить права','callback_data'=>'pause:verify:'.(int)$existing['id'].':settings']]]]]);return;
+        }
         $existingOwnerIsAdministrator = null;
         $freezePermissionIds = null;
         $actorIds = [$userId];
-        if (!in_array($memberStatus, ['creator', 'administrator'], true)) {
+        if (($memberResult['ok']??null)!==true || ($member['user']['id']??null)!==$userId || ($member['user']['is_bot']??null)!==false
+            || !in_array($memberStatus, ['creator', 'administrator'], true)) {
             $this->telegram->sendMessage(
                 $userId,
                 'Подключить канал может только его владелец или администратор.'
@@ -10978,10 +11663,9 @@ final class PostedBot
             return;
         }
         if ($existingOwner > 0 && $existingOwner !== $userId) {
-            $existingOwnerIsAdministrator=$this->telegramChannelAdministratorStatus(
-                $chatId,
-                $existingOwner
-            );
+            $existingOwnerIsAdministrator=$this->telegramTransferredChannelOwnerReceipt($existing) !== null
+                ? true
+                : $this->telegramChannelAdministratorStatus($chatId,$existingOwner);
             if($existingOwnerIsAdministrator===null){
                 $this->telegram->sendMessage(
                     $userId,
@@ -11007,8 +11691,9 @@ final class PostedBot
             sort($actorIds,SORT_NUMERIC);
         }
 
-        $this->pdo->beginTransaction();
+        PostedTelegramRootedAccess::begin($this->pdo,$this->config,true);
         try {
+            if(!PostedTelegramRootedAccess::canConnect($this->pdo,$this->config,$userId))throw new RuntimeException('Право подключения каналов отозвано.');
             $lockedExisting = null;
             // Known channel rows precede the actor, as in every channel action.
             // Do not lock a missing chat-id range before the actor: compatible
@@ -11018,7 +11703,7 @@ final class PostedBot
                 $known->execute(['id'=>(int)$existing['id']]);
                 $lockedExisting=$known->fetch();
                 if (!is_array($lockedExisting) || (string)$lockedExisting['chat_id'] !== $chatId) {
-                    $this->pdo->commit();
+                    PostedTelegramRootedAccess::commit($this->pdo);
                     return;
                 }
             }
@@ -11030,7 +11715,7 @@ final class PostedBot
                 }
             }
             if (!$this->lockActiveTelegramActor($userId)) {
-                $this->pdo->commit();
+                PostedTelegramRootedAccess::commit($this->pdo);
                 return;
             }
             $current = $this->pdo->prepare(
@@ -11039,11 +11724,19 @@ final class PostedBot
             );
             $current->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
             if ($current->fetchColumn() === false) {
-                $this->pdo->commit();
+                PostedTelegramRootedAccess::commit($this->pdo);
                 return;
+            }
+            if(is_array($lockedExisting)){
+                $lockedPause=PostedTelegramAuthorityPause::read($this->pdo,$lockedExisting,true);
+                $closedReconnect=$closedReconnect&&(int)($lockedExisting['added_by']??0)<=0&&($lockedPause['phase']??null)==='closed_explicitly';
+                if(!$closedReconnect&&PostedTelegramAuthorityPause::blocked($this->pdo,$lockedExisting,true))throw new PostedTelegramAuthorityPauseException('paused');
             }
             $lockedOwner = is_array($lockedExisting) ? (int)($lockedExisting['added_by']??0) : 0;
             if ($lockedOwner > 0 && $lockedOwner !== $userId) {
+                if ($this->telegramTransferredChannelOwnerReceipt($lockedExisting) !== null) {
+                    throw new RuntimeException('У этого канала уже назначен другой действующий владелец GitPosted.');
+                }
                 if ($lockedOwner !== $existingOwner || $existingOwnerIsAdministrator !== false) {
                     throw new RuntimeException('Владелец канала изменился. Подключите канал заново.');
                 }
@@ -11059,6 +11752,9 @@ final class PostedBot
                 if (!$this->freezeTelegramChannelOwnership((int)$lockedExisting['id'],$lockedOwner)) {
                     throw new RuntimeException('Не удалось освободить канал после отзыва прав прежнего владельца. Попробуйте ещё раз.');
                 }
+            }
+            if(is_array($lockedExisting)&&$lockedOwner>0&&$lockedOwner!==$userId){
+                PostedTelegramRootedAccess::commit($this->pdo);$this->telegram->sendMessage($userId,'Канал приостановлен после изменения прав прежнего владельца. Посты и даты сохранены; смена владельца требует отдельной проверки.');return;
             }
             $stmt = $this->pdo->prepare(
                 "INSERT INTO posted_channels
@@ -11080,6 +11776,9 @@ final class PostedBot
             if ((int) ($channel['added_by'] ?? 0) !== $userId) {
                 throw new RuntimeException('Channel already has another GitPosted owner.');
             }
+            if($closedReconnect)PostedTelegramAuthorityPause::reopenExplicitLocked($this->pdo,$channel,$userId,['actor_id'=>$userId,'chat_id'=>$chatId,'actor_admin'=>true,'bot_admin'=>true,'monotonic'=>$registrationProofStarted]);
+            // A new human-admin registration starts a fresh authority binding.
+            $this->clearTelegramChannelTransferReceipt((int) $channel['id']);
             $this->grant($userId,(int)$channel['id'],true,true,true,true,$userId);
             $consume=$this->pdo->prepare(
                 "UPDATE posted_users SET state=NULL,state_data=NULL WHERE telegram_id=:user
@@ -11087,9 +11786,9 @@ final class PostedBot
             );
             $consume->execute(['user'=>$userId,'data'=>$this->encodeJson($expectedStateData)]);
             if ($consume->rowCount() !== 1) throw new RuntimeException('Подтверждение подключения изменилось. Повторите подключение.');
-            $this->pdo->commit();
+            PostedTelegramRootedAccess::commit($this->pdo);
         } catch(Throwable $exception) {
-            if($this->pdo->inTransaction())$this->pdo->rollBack();
+            if($this->pdo->inTransaction())PostedTelegramRootedAccess::rollback($this->pdo);
             $this->telegram->sendMessage($userId,'Не удалось сохранить канал: '.$exception->getMessage());
             return;
         }
@@ -11105,8 +11804,15 @@ final class PostedBot
             . "✓ Удаление сообщений\n"
             . "✓ Редактирование сообщений\n\n"
             . $ownerText,
-            ['reply_markup' => ['inline_keyboard' => $keyboard]]
+            [
+                'message_effect_id' => '5046509860389126442',
+                'reply_markup' => ['inline_keyboard' => $keyboard],
+            ]
         );
+        if($this->telegramSubscriptionPaid()){
+            $subscriptionState=$this->telegramPolicyPreflightChannel($channel,'basic');
+            $this->telegramSubscriptionChannelConnected($userId,$channel,is_int($subscriptionState['member_count']??null)?$subscriptionState['member_count']:null);
+        }
     }
     private function userTimezone(int $userId): string
     {
@@ -11188,28 +11894,36 @@ final class PostedBot
             $keyboard[] = [[
                 'text' => $key === 'folders'
                     ? '📁 ' . $definition['title']
-                    : ($enabled ? (string)($definition['enabled_icon']??'✅ ') : '☑️ ') . $definition['title'],
+                    : ($enabled ? (string)($definition['enabled_icon']??'✅️ ') : '☑️ ') . $definition['title'],
                 'callback_data' => 'settings:adv:' . $key
                     .($key==='folders'?'':':'.($enabled?0:1)),
             ]];
         }
         $keyboard[] = [['text' => '← Назад', 'callback_data' => 'settings:root']];
 
+        $header=PostedTelegramContentPlanUi::advancedHeader();
         $this->sendOrEditMessage(
             $userId,
-            "🎓 ПРОДВИНУТЫЕ НАСТРОЙКИ\n\nВ этом разделе вы можете настроить продвинутые функции бота.",
-            ['reply_markup' => ['inline_keyboard' => $keyboard]],
+            $header['text'],
+            ['entities'=>$header['entities'],'reply_markup' => ['inline_keyboard' => $keyboard]],
             $target
         );
     }
 
     private function advancedSettingDefinitions(): array
     {
-        return [
+        $definitions = [
             'folders' => ['column' => 'setting_folders', 'title' => 'Папки'],
             'confirm_schedule' => ['column' => 'setting_confirm_schedule', 'title' => 'Подтверждать планирование постов'],
+            'compact_plan' => ['column' => 'setting_compact_plan', 'title' => 'Сокращенный контент-план'],
+            'show_plan_icons' => ['column' => 'setting_show_plan_icons', 'title' => 'Показывать иконки в отлоге'],
             'delay_alerts' => ['column' => 'setting_delay_alerts', 'title' => 'Уведомлять о задержке постов'],
         ];
+        if($this->telegramWebReady())$definitions=[
+            'folders'=>$definitions['folders'],
+            'web_mode'=>['column'=>'setting_web_mode','title'=>'Веб-режим'],
+        ]+$definitions;
+        return $definitions;
     }
 
     private function toggleAdvancedSetting(
@@ -11441,6 +12155,7 @@ final class PostedBot
     {
         $channels = $this->allowedChannels($userId, 'post');
         $keyboard = [];
+        if($this->telegramSubscriptionPaid())$keyboard[]=[['text'=>$this->telegramSubscriptionText($userId,'💰 Подписка','💰 Subscription'),'callback_data'=>'sub:open']];
         $channelButtons = [];
         foreach ($channels as $channel) {
             $channelButtons[] = ['text' => (string) $channel['title'], 'callback_data' => 'settings_channel:' . (int) $channel['id']];
@@ -11448,16 +12163,19 @@ final class PostedBot
         foreach (array_chunk($channelButtons, 2) as $row) {
             $keyboard[] = $row;
         }
+        $pausedEntry=$this->telegramAuthorityPauseEntryButton($userId,'settings');if($pausedEntry!==null)$keyboard[]=[$pausedEntry];
         $tz = $this->userTimezone($userId);
-        $keyboard[] = [['text' => '➕ Добавить новый канал', 'callback_data' => 'settings:add_channel']];
+        $keyboard[] = [['text' => $this->telegramUiText($userId, 'button.add_channel', '➕ Добавить новый канал'), 'callback_data' => 'settings:add_channel']];
         if ($this->ownedChannels($userId) !== []) {
             $keyboard[] = [['text' => '👥 Редакторы каналов', 'callback_data' => 'settings:admins']];
             $keyboard[] = [['text' => '💼 Рекламные менеджеры', 'callback_data' => 'settings:managers']];
         }
-        $keyboard[] = [['text' => 'Часовой пояс: ' . $this->timezoneTitle($tz) . ' (' . $this->timezoneTime($tz) . ')', 'callback_data' => 'settings:timezone']];
-        $keyboard[] = [['text' => 'Продвинутые настройки', 'callback_data' => 'settings:advanced']];
+        $timezoneTitle = $this->telegramUiLanguage($userId) === 'en' && $tz === 'Europe/Moscow' ? 'Moscow' : $this->timezoneTitle($tz);
+        $keyboard[] = [['text' => $this->telegramUiText($userId, 'settings.timezone', 'Часовой пояс: ' . $this->timezoneTitle($tz) . ' (' . $this->timezoneTime($tz) . ')', ['timezone'=>$timezoneTitle, 'time'=>$this->timezoneTime($tz)]), 'callback_data' => 'settings:timezone']];
+        if($this->telegramSubscriptionPaid())$keyboard[]=[['text'=>$this->telegramSubscriptionText($userId,'Реферальная программа','👥 Referral program'),'callback_data'=>'sub:referral']];
+        $keyboard[] = [['text' => $this->telegramUiText($userId, 'button.advanced', 'Продвинутые настройки'), 'callback_data' => 'settings:advanced']];
         $keyboard[] = [['text' => '♻️ Перенос данных', 'callback_data' => 'transfer:open']];
-        $this->sendOrEditMessage($userId, $this->customEmojiHtml('5258096772776991776', '⚙️') . " <b>НАСТРОЙКИ</b>\n\nВ этом разделе вы можете настроить работу с ботом, с отдельным каналом, а также добавить новый канал в GitPosted.", [
+        $this->sendOrEditMessage($userId, $this->telegramUiText($userId, 'settings.body', $this->customEmojiHtml('5258096772776991776', '⚙️') . " <b>НАСТРОЙКИ</b>\n\nВ этом разделе вы можете настроить работу с ботом, с отдельным каналом, а также добавить новый канал в GitPosted.", ['brand'=>'GitPosted']), [
             'parse_mode' => 'HTML',
             'reply_markup' => ['inline_keyboard' => $keyboard],
         ], $target);
@@ -11512,10 +12230,11 @@ final class PostedBot
     private function showMyChannels(int $userId, ?array $target = null): void
     {
         $channels = $this->allowedChannels($userId, 'post');
+        $pausedEntry=$this->telegramAuthorityPauseEntryButton($userId,'channels');
         $keyboard = [];
         $lines = ["📣 МОИ КАНАЛЫ\n"];
         if ($channels === []) {
-            $lines[] = 'У вас пока нет подключённых каналов.';
+            $lines[] = $pausedEntry===null?'У вас пока нет подключённых каналов.':'Нет каналов с текущим доступом. Сохранённые посты доступны в разделе ниже.';
         } else {
             $lines[] = 'Выберите канал:';
             foreach ($channels as $channel) {
@@ -11535,6 +12254,7 @@ final class PostedBot
                 $keyboard[] = [['text' => (string) $channel['title'], 'callback_data' => 'settings_channel:' . $channelId]];
             }
         }
+        if($pausedEntry!==null)$keyboard[]=[$pausedEntry];
         $keyboard[] = [['text' => '➕ Добавить новый канал', 'callback_data' => 'settings:add_channel']];
         $keyboard[] = [['text' => '← Назад', 'callback_data' => 'settings:root']];
         $this->sendOrEditMessage($userId, implode("\n", $lines), [
@@ -11744,7 +12464,7 @@ final class PostedBot
     {
         $c=$this->channel($channelId); if(!$c||!$this->can($userId,$channelId,'manage_admins'))return;
         $kb=[
-            [['text'=>'Таймер удаления: '.($c['ad_delete_minutes']?$this->minutesLabel((int)$c['ad_delete_minutes']):'нет'),'callback_data'=>'chad:timer:'.$channelId]],
+            [['text'=>'Таймер удаления: '.($c['ad_delete_minutes']?$this->telegramDeleteTimerLabel((int)$c['ad_delete_minutes']):'нет'),'callback_data'=>'chad:timer:'.$channelId]],
             [['text'=>'Автоподпись: '.(!empty($c['ad_autosignature'])?'да':'нет'),'callback_data'=>'chad:autosignature:'.$channelId],['text'=>!empty($c['ad_silent'])?'🔕':'🔔','callback_data'=>'chad:silent:'.$channelId.':'.(empty($c['ad_silent'])?1:0)]],
             [['text'=>(!empty($c['ad_pin'])?'✅️':'☑️').' Закрепить','callback_data'=>'chad:pin:'.$channelId.':'.(empty($c['ad_pin'])?1:0)]],
             [['text'=>'🗑️ Удалить','callback_data'=>'chad:delete:'.$channelId]],
@@ -11759,11 +12479,11 @@ final class PostedBot
         $c=$this->channel($channelId);if(!$c||!$this->can($userId,$channelId,'manage_admins'))return;
         $this->setState($userId,'await_channel_ad_timer',['channel_id'=>$channelId]);
         $values=[0,5,15,30,60,120,240,360,720,1080,1440,2875,4320,7200,10080,14400];
-        $labels=['Нет','5 мин','15 мин','30 мин','1 ч','2 ч','4 ч','6 ч','12 ч','18 ч','24 ч','48 ч','3 д','5 д','7 д','10 д'];
+        $selected=$this->normalizeTelegramDeleteTimerMinutes((int)($c['ad_delete_minutes']??0));
         $rows=[];
-        foreach(array_chunk(array_keys($values),4) as $indexes){$row=[];foreach($indexes as $i){$button=['text'=>$labels[$i],'callback_data'=>'chad:settimer:'.$channelId.':'.$values[$i]];if(($c['ad_delete_minutes']===null&&$values[$i]===0)||(int)$c['ad_delete_minutes']===$values[$i])$button['style']='primary';$row[]=$button;}$rows[]=$row;}
+        foreach(array_chunk($values,4) as $chunk){$row=[];foreach($chunk as $value){$button=['text'=>$this->telegramDeleteTimerLabel($value),'callback_data'=>'chad:settimer:'.$channelId.':'.$value];if($selected===$value)$button['style']='primary';$row[]=$button;}$rows[]=$row;}
         $rows[]=[['text'=>'← Назад','callback_data'=>'channel_ad_settings:'.$channelId]];
-        $text="🗑 ТАЙМЕР УДАЛЕНИЯ РЕКЛАМЫ\n\nВы можете установить через какое время после выхода рекламного поста, он будет удалён.\n\nОтправьте боту время, через которое нужно удалить рекламу либо выберите один из предложенных вариантов.\n\n6 - удалить через 6 ч\n6:30 - удалить через 6 ч 30 мин\n6 30 - удалить через 6 ч 30 мин\n10д - удалить через 10 дней";
+        $text="🗑 ТАЙМЕР УДАЛЕНИЯ РЕКЛАМЫ\n\nВыберите срок после публикации или отправьте его сообщением.\n\n".$this->telegramDeleteTimerHint()."\n\n6 — через 6 ч\n6:30 или 6 30 — через 6 ч 30 мин\n2д — автоудаление ≈48 ч\n10д — напоминание удалить вручную через 10 дней";
         $this->sendOrEditMessage($userId,$text,['reply_markup'=>['inline_keyboard'=>$rows]],$target);
     }
 
@@ -11843,12 +12563,17 @@ final class PostedBot
     {
         $channel=$this->channel($channelId);
         if(!$channel||!$this->isChannelOwner($userId,$channelId))return;
+        if(PostedTelegramAuthorityPause::blocked($this->pdo,$channel)){
+            $this->telegram->sendMessage($userId,'Канал приостановлен. Используйте отдельную проверку прав для возобновления.');return;
+        }
         try{
             $chatId=(string)$channel['chat_id'];
             $chat=(array)(($this->telegram->call('getChat',['chat_id'=>$chatId]))['result']??[]);
             $botId=(int)((($this->telegram->call('getMe'))['result']??[])['id']??0);
             $bot=(array)(($this->telegram->call('getChatMember',['chat_id'=>$chatId,'user_id'=>$botId]))['result']??[]);
-            $this->pdo->beginTransaction();
+            PostedTelegramRootedAccess::begin($this->pdo,$this->config,true);
+            $locked=$this->pdo->prepare('SELECT * FROM posted_channels WHERE id=? LIMIT 1 FOR UPDATE');$locked->execute([$channelId]);$current=$locked->fetch();
+            if(!$current||(int)$current['added_by']!==$userId||PostedTelegramAuthorityPause::blocked($this->pdo,$current,true))throw new PostedTelegramAuthorityPauseException('paused');
             $this->pdo->prepare(
                 'UPDATE posted_channels
                  SET title=:title,username=:username,
@@ -11866,15 +12591,18 @@ final class PostedBot
                 'delete'=>!empty($bot['can_delete_messages'])?1:0,
                 'id'=>$channelId,
             ]);
+            if (in_array((string) ($bot['status'] ?? ''), ['left', 'kicked'], true)) {
+                $this->clearTelegramChannelTransferReceipt($channelId);
+            }
             $this->grant($userId,$channelId,true,true,true,true,$userId);
             $this->pdo->prepare(
                 'UPDATE posted_permissions
                  SET can_manage_admins=0
                  WHERE channel_id=:channel AND user_id<>:owner'
             )->execute(['channel'=>$channelId,'owner'=>$userId]);
-            $this->pdo->commit();
+            PostedTelegramRootedAccess::commit($this->pdo);
         }catch(Throwable $exception){
-            if($this->pdo->inTransaction())$this->pdo->rollBack();
+            if($this->pdo->inTransaction())PostedTelegramRootedAccess::rollback($this->pdo);
             $this->telegram->sendMessage($userId,'Не удалось обновить данные канала: '.$exception->getMessage());
         }
     }
@@ -11945,6 +12673,7 @@ final class PostedBot
             $keyboard[] = [['text' => 'Покинуть канал', 'callback_data' => 'channel_leave:' . $channelId]];
             $keyboard[] = [['text' => '← Назад', 'callback_data' => 'settings:root']];
         }
+        $keyboard[]=[$this->telegramTopPlacementGraphButton($userId,$channelId)];
         $this->sendOrEditMessage($userId, implode("\n", $lines), ['reply_markup' => ['inline_keyboard' => $keyboard]], $target);
     }
 
@@ -12272,10 +13001,10 @@ final class PostedBot
                 );
             }
             try {
-                $this->pdo->beginTransaction();
+                PostedTelegramRootedAccess::begin($this->pdo,$this->config,true);
                 try {
                     $lockedChannel = $this->pdo->prepare(
-                    'SELECT title,added_by
+                    'SELECT *
                      FROM posted_channels
                      WHERE id=:channel
                      LIMIT 1
@@ -12289,6 +13018,8 @@ final class PostedBot
                 if (!$this->lockActiveTelegramActor($userId)) {
                     throw new RuntimeException('Пользователь заблокирован.');
                 }
+                PostedTelegramAuthorityPause::closeExplicitLocked($this->pdo,$channel,'explicit_disable');
+                PostedTelegramTopHold::retireChannelQuotasLocked($this->pdo,$channel);
                 $permissionUsers = $this->pdo->prepare(
                     'SELECT user_id FROM posted_permissions WHERE channel_id=:channel'
                 );
@@ -12372,10 +13103,11 @@ final class PostedBot
                 if ($detach->rowCount() !== 1) {
                     throw new RuntimeException('Владелец канала изменился во время отключения.');
                 }
-                    $this->pdo->commit();
+                $this->clearTelegramChannelTransferReceipt($channelId);
+                    PostedTelegramRootedAccess::commit($this->pdo);
                 } catch (Throwable $exception) {
                     if ($this->pdo->inTransaction()) {
-                        $this->pdo->rollBack();
+                        PostedTelegramRootedAccess::rollback($this->pdo);
                     }
                     throw $exception;
                 }
@@ -12437,7 +13169,7 @@ final class PostedBot
             $this->telegram->sendMessage($userId, 'Владелец не может покинуть собственный канал.');
             return;
         }
-        $this->pdo->beginTransaction();
+        PostedTelegramRootedAccess::begin($this->pdo,$this->config,true);
         try {
             $channelLock = $this->pdo->prepare(
                 'SELECT title
@@ -12468,10 +13200,10 @@ final class PostedBot
                 throw new RuntimeException('Доступ редактора уже отсутствует.');
             }
             $this->clearUserChannelWorkflow($userId,$channelId);
-            $this->pdo->commit();
+            PostedTelegramRootedAccess::commit($this->pdo);
         } catch (Throwable $exception) {
             if ($this->pdo->inTransaction()) {
-                $this->pdo->rollBack();
+                PostedTelegramRootedAccess::rollback($this->pdo);
             }
             throw $exception;
         }
@@ -12550,6 +13282,7 @@ final class PostedBot
             }
             $keyboard[] = [$button];
         }
+        if($current!==null&&($topQuotaButton=$this->telegramTopQuotaButton($ownerId,$channelId,$adminId,$page))!==null)$keyboard[]=[$topQuotaButton];
         $keyboard[] = [[
             'text' => '← Назад',
             'callback_data' => 'channel_editors:' . $channelId . ':' . $page,
@@ -12571,6 +13304,11 @@ final class PostedBot
         int $page = 0,
         ?array $target = null
     ): void {
+        if(!$this->telegramPolicyAllowOperator($ownerId))return;
+        if(!PostedTelegramRootedAccess::enabled(PostedTelegramRootedAccess::current($this->config))&&!$this->telegramPolicyOperatorAllowed($adminId)){
+            $this->telegram->sendMessage($ownerId,'Этот Telegram ID не включён в список доступа к боту. Права не изменены.');
+            return;
+        }
         if (!$this->isChannelOwner($ownerId, $channelId)) {
             $this->telegram->sendMessage($ownerId, 'Нет доступа.');
             return;
@@ -12717,6 +13455,7 @@ final class PostedBot
             [['text'=>'📝 Описание','callback_data'=>'admin_manager_field:'.$channelId.':'.$managerId.':description:'.$page]],
             [['text'=>'📨 Лимит публикаций','callback_data'=>'admin_manager_field:'.$channelId.':'.$managerId.':posts:'.$page]],
             [['text'=>'📌 Лимит закреплений','callback_data'=>'admin_manager_field:'.$channelId.':'.$managerId.':pins:'.$page]],
+            ...(($topQuotaButton=$this->telegramTopQuotaButton($ownerId,$channelId,$managerId,$page))!==null?[[$topQuotaButton]]:[]),
             [['text'=>'🏷 Рекламные компании','callback_data'=>'manager_categories:'.$channelId.':'.$managerId.':'.$page]],
             [['text'=>'← К списку','callback_data'=>'channel_managers:'.$channelId.':'.$page]],
         ]]], $target);
@@ -12961,7 +13700,7 @@ final class PostedBot
         return $buttons;
     }
 
-    private function handlePublicInteractiveButton(array $callback, string $data): void
+    private function handleLegacyPublicInteractiveButton(array $callback, string $data): void
     {
         $parts = explode(':', $data, 3);
         $kind = (string) ($parts[0] ?? '');
@@ -13064,6 +13803,23 @@ final class PostedBot
         }
         $this->answerCallback($callback);
     }
+    /** null means invalid input; [] is reserved for the explicit legacy clear command. */
+    private function parseButtonsInput(array $message): ?array
+    {
+        $raw=$message['text']??null;
+        if(!is_string($raw)||trim($raw)==='')return null;
+        $buttons=$this->parseButtons($raw);
+        return trim($raw)==='-'||$buttons!==[]?$buttons:null;
+    }
+
+    private function parseReactionButtonsInput(int $postId,array $message): ?array
+    {
+        $raw=$message['text']??null;
+        if(!is_string($raw)||trim($raw)==='')return null;
+        $buttons=$this->parseReactionButtons($postId,$raw);
+        return $buttons!==[]?$buttons:null;
+    }
+
     private function parseButtons(string $text): array
     {
         if (trim($text) === '-') {
@@ -13331,7 +14087,7 @@ final class PostedBot
              ORDER BY c.title"
         );
         $stmt->execute(['user_id' => $userId]);
-        return $stmt->fetchAll();
+        return array_values(array_filter($stmt->fetchAll(),fn(array $c):bool=>PostedTelegramRootedAccess::channel($this->pdo,$this->config,$userId,(int)$c['id'])));
     }
 
     private function allowedChannelIds(int $userId, string $ability): array
@@ -13355,15 +14111,16 @@ final class PostedBot
         }
         $placeholders = implode(',', array_fill(0, count($channelIds), '?'));
         [$start,$end]=$this->storageRangeForUserDate($userId,$date);
+        $effectiveAt=PostedTelegramContentPlanUi::effectiveDateSql('p.');
         $stmt = $this->pdo->prepare(
             "SELECT p.*, c.chat_id, c.title AS channel_title
              FROM posted_posts p
              INNER JOIN posted_channels c ON c.id = p.channel_id
              WHERE p.channel_id IN ({$placeholders})
                AND p.status IN ('scheduled','telegram_pending','sent','failed')
-               AND COALESCE(p.scheduled_at,p.created_at)>=?
-               AND COALESCE(p.scheduled_at,p.created_at)<?
-             ORDER BY COALESCE(p.scheduled_at, p.created_at), p.id"
+               AND {$effectiveAt}>=?
+               AND {$effectiveAt}<?
+             ORDER BY {$effectiveAt}, p.id"
         );
         $stmt->execute([...$channelIds,$start,$end]);
         return $stmt->fetchAll();
@@ -13452,13 +14209,14 @@ final class PostedBot
         $placeholders=implode(',',array_fill(0,count($channelIds),'?'));
         [$start,$ignored]=$this->storageRangeForUserDate($userId,$month.'-01');
         $monthEnd=(new DateTimeImmutable($month.'-01 00:00:00',$this->userTimezoneObject($userId)))->modify('+1 month')->setTimezone($this->storageTimezone())->format('Y-m-d H:i:s');
+        $effectiveAt=PostedTelegramContentPlanUi::effectiveDateSql('');
         $stmt = $this->pdo->prepare(
-            "SELECT COALESCE(scheduled_at,created_at) AS effective_at
+            "SELECT {$effectiveAt} AS effective_at
              FROM posted_posts
              WHERE channel_id IN ({$placeholders})
                AND status IN ('scheduled','telegram_pending','sent','failed')
-               AND COALESCE(scheduled_at,created_at)>=?
-               AND COALESCE(scheduled_at,created_at)<?"
+               AND {$effectiveAt}>=?
+               AND {$effectiveAt}<?"
         );
         $stmt->execute([...$channelIds,$start,$monthEnd]);
         $result = [];
@@ -13471,6 +14229,7 @@ final class PostedBot
 
     private function can(int $userId, int $channelId, string $ability): bool
     {
+        if(!PostedTelegramRootedAccess::channel($this->pdo,$this->config,$userId,$channelId))return false;
         $column = match ($ability) {
             'schedule' => 'can_schedule',
             'manage_posts' => 'can_manage_posts',
@@ -13541,7 +14300,21 @@ final class PostedBot
 
     private function postPlanButtonTitle(int $userId, array $post): string
     {
-        $time=$post['scheduled_at']?$this->formatStoredForUser($userId,(string)$post['scheduled_at'],'H:i'):'--:--';
+        $time=$this->contentPlanRowTime($userId,$post);
+        $settings=$this->user($userId)??[];
+        $options=$this->telegramPostOptions($post);
+        // Only the observed ordinary-copy layout changes. Paid and native-forward fallbacks remain below.
+        if(empty($post['repost_chat_id'])&&empty($post['repost_message_id'])&&($options['paid_media_stars']??null)===null){
+            $presentation=$this->contentPlanMediaPresentation($post);
+            $compact=PostedTelegramContentPlanUi::compact($settings);
+            $label=PostedTelegramContentPlanUi::capturedRow($post,$presentation['text'],$presentation['marker'],$this->storageTimezone(),$this->userTimezoneObject($userId),$compact);
+            if($compact)return $label;
+            // The meaning of show_plan_icons is still being probed; preserve existing option suffixes.
+            $delete=(int)($post['delete_after_minutes']??0);$repeat=(int)($post['repeat_interval_minutes']??0);
+            if($delete>0)$label.=' 🗑'.$this->telegramDeleteTimerLabel($delete);
+            if($repeat>0)$label.=' 🔁'.$this->shortMinutesLabel($repeat);
+            return $label;
+        }
         $text = trim((string) ($post['text'] ?? ''));
         $first = strtok($text, "\n") ?: '[медиа]';
         $first = trim((string) $first);
@@ -13556,11 +14329,13 @@ final class PostedBot
             'draft' => '📝',
             default => '⏳',
         };
-        $parts = [$time, $status, $first];
+        $parts = [$time, $status];
+        $photoMarker=$this->contentPlanPhotoMarker($userId,$post);if($photoMarker!=='')$parts[]=$photoMarker;
+        $parts[]=$first;
         $delete = (int) ($post['delete_after_minutes'] ?? 0);
         $repeat = (int) ($post['repeat_interval_minutes'] ?? 0);
         if ($delete > 0) {
-            $parts[] = '🗑' . $this->shortMinutesLabel($delete);
+            $parts[] = '🗑' . $this->telegramDeleteTimerLabel($delete);
         }
         if ($repeat > 0) {
             $parts[] = '🔁' . $this->shortMinutesLabel($repeat);
@@ -13585,6 +14360,7 @@ final class PostedBot
     private function managedPostControlText(int $userId, array $post): string
     {
         $status = (string) ($post['status'] ?? '');
+        if($status==='sent')return $this->contentPlanPublishedDetail($userId,$post)['text'];
         $icon = match ($status) {
             'sent' => '👀',
             'scheduled' => '⏱',
@@ -13671,6 +14447,39 @@ final class PostedBot
         return $minutes . ' мин';
     }
 
+    private function telegramDeleteTimerLabel(int $minutes): string
+    {
+        // The stored two-day preset deliberately leaves time for the minute
+        // cron. This is presentation only; repeat intervals keep exact values.
+        $minutes=$this->normalizeTelegramDeleteTimerMinutes($minutes);
+        if($minutes===self::TELEGRAM_MAX_AUTO_DELETE_MINUTES)return '≈48 ч';
+        $label=$this->minutesLabel($minutes);
+        return $minutes>self::TELEGRAM_MAX_AUTO_DELETE_MINUTES?$label.' · вручную':$label;
+    }
+
+    private function telegramDeleteTimerHint(): string
+    {
+        return 'Автоудаление Telegram доступно только раньше 48 часов. '
+            .'«≈48 ч» — это 47 ч 55 мин: 5 минут запаса на работу бота. '
+            .'Большие сроки — напоминание удалить пост вручную, без автоудаления.';
+    }
+
+    private function telegramDeleteTimerKeyboard(string $prefix,array $values,string $backCallback,?int $selected=null):array
+    {
+        $selected=$selected===null?null:$this->normalizeTelegramDeleteTimerMinutes($selected);
+        $keyboard=[];$row=[];
+        foreach($values as$value){
+            $value=(int)$value;
+            $button=['text'=>$this->telegramDeleteTimerLabel($value),'callback_data'=>$prefix.$value];
+            if($selected!==null&&$selected===$this->normalizeTelegramDeleteTimerMinutes($value))$button['style']='primary';
+            $row[]=$button;
+            if(count($row)===3){$keyboard[]=$row;$row=[];}
+        }
+        if($row!==[])$keyboard[]=$row;
+        $keyboard[]=[['text'=>'← Назад','callback_data'=>$backCallback]];
+        return $keyboard;
+    }
+
     private function shortMinutesLabel(int $minutes): string
     {
         if ($minutes <= 0) {
@@ -13742,9 +14551,11 @@ final class PostedBot
         if ($userId <= 0 || $channelId <= 0 || $expectedOwnerId <= 0) {
             throw new InvalidArgumentException('Некорректные данные доступа к каналу.');
         }
+        PostedTelegramPolicy::requireOperator($this->config,$expectedOwnerId,$this->pdo);
+        if(!PostedTelegramRootedAccess::enabled(PostedTelegramRootedAccess::current($this->config)))PostedTelegramPolicy::requireOperator($this->config,$userId,$this->pdo);
         $ownsTransaction = !$this->pdo->inTransaction();
         if ($ownsTransaction) {
-            $this->pdo->beginTransaction();
+            PostedTelegramRootedAccess::begin($this->pdo,$this->config,true);
         }
         try {
             $channel = $this->pdo->prepare(
@@ -13760,6 +14571,11 @@ final class PostedBot
             }
             if (!$this->lockActiveTelegramActor($expectedOwnerId)) {
                 throw new RuntimeException('Владелец канала заблокирован.');
+            }
+            if(PostedTelegramRootedAccess::enabled(PostedTelegramRootedAccess::current($this->config))){
+                if(!PostedTelegramRootedAccess::channel($this->pdo,$this->config,$expectedOwnerId,$channelId)&&!PostedTelegramRootedAccess::canConnect($this->pdo,$this->config,$expectedOwnerId))throw new RuntimeException('Нет доступа к каналу.');
+                $this->pdo->prepare("INSERT INTO posted_users(telegram_id,role) VALUES(?,'user') ON DUPLICATE KEY UPDATE telegram_id=VALUES(telegram_id)")->execute([$userId]);
+                if(!$this->lockActiveTelegramActor($userId))throw new RuntimeException('Сотрудник заблокирован.');
             }
             $stmt = $this->pdo->prepare(
                 'INSERT INTO posted_permissions
@@ -13780,11 +14596,11 @@ final class PostedBot
                 'can_manage_admins' => $manageAdmins ? 1 : 0,
             ]);
             if ($ownsTransaction) {
-                $this->pdo->commit();
+                PostedTelegramRootedAccess::commit($this->pdo);
             }
         } catch (Throwable $exception) {
             if ($ownsTransaction && $this->pdo->inTransaction()) {
-                $this->pdo->rollBack();
+                PostedTelegramRootedAccess::rollback($this->pdo);
             }
             throw $exception;
         }
@@ -13793,6 +14609,7 @@ final class PostedBot
     private function upsertUser(array $from): void
     {
         $id = (int) ($from['id'] ?? 0);
+        if(!$this->telegramPolicyOperatorAllowed($id))return;
         if ($id <= 0) {
             return;
         }
@@ -13813,6 +14630,7 @@ final class PostedBot
 
     private function upsertBareUser(int $id, string $role = 'user'): void
     {
+        if(!$this->telegramPolicyOperatorAllowed($id)&&!($this->pdo->inTransaction()&&PostedTelegramRootedAccess::enabled(PostedTelegramRootedAccess::current($this->config))))return;
         if ($id <= 0) {
             return;
         }
@@ -13866,6 +14684,7 @@ final class PostedBot
 
     private function isChannelOwner(int $userId, int $channelId): bool
     {
+        if(!PostedTelegramRootedAccess::channel($this->pdo,$this->config,$userId,$channelId))return false;
         if (
             $userId <= 0
             || $channelId <= 0
@@ -13883,7 +14702,8 @@ final class PostedBot
         }
         try {
             $result = $this->telegram->call('getMe');
-            $this->telegramBotIdCache = max(0, (int) ($result['result']['id'] ?? 0));
+            $identity=$result['result']??[];
+            $this->telegramBotIdCache=($result['ok']??null)===true&&is_int($identity['id']??null)&&$identity['id']>0&&($identity['is_bot']??null)===true?$identity['id']:0;
         } catch (Throwable $exception) {
             error_log('GitPosted could not verify Telegram bot identity: ' . $exception->getMessage());
             $this->telegramBotIdCache = 0;
@@ -13896,36 +14716,85 @@ final class PostedBot
         return $chatId . ':' . $userId;
     }
 
-    private function telegramChannelAdministratorStatus(string $chatId, int $userId): ?bool
+    private function telegramChannelAdministratorStatus(string $chatId,int $userId): ?bool
     {
-        if ($chatId === '' || $userId <= 0) {
-            return false;
-        }
-        $cacheKey = $this->telegramChannelAdminCacheKey($chatId, $userId);
-        if (array_key_exists($cacheKey, $this->telegramChannelAdminCache)) {
-            return $this->telegramChannelAdminCache[$cacheKey];
-        }
+        if($chatId===''||$userId<=0)return null;$key=$this->telegramChannelAdminCacheKey($chatId,$userId);
+        if(array_key_exists($key,$this->telegramChannelAdminCache))return$this->telegramChannelAdminCache[$key];
+        try{$response=$this->telegram->call('getChatMember',['chat_id'=>$chatId,'user_id'=>$userId]);$member=$response['result']??[];
+            if(($response['ok']??null)!==true||($member['user']['id']??null)!==$userId||($member['user']['is_bot']??null)!==false
+                ||!in_array($member['status']??null,['creator','administrator','member','restricted','left','kicked'],true))return$this->telegramChannelAdminCache[$key]=null;
+            return$this->telegramChannelAdminCache[$key]=in_array($member['status'],['creator','administrator'],true);
+        }catch(Throwable){return$this->telegramChannelAdminCache[$key]=null;}
+    }
+
+
+    private function telegramTransferredChannelOwnerReceipt(array $channel): ?array
+    {
+        $channelId = (int) ($channel['id'] ?? 0);
+        if ($channelId <= 0) return null;
+        $statement = $this->pdo->prepare(
+            'SELECT setting_value FROM posted_app_settings WHERE setting_key=:key LIMIT 1'
+        );
+        $statement->execute(['key'=>'telegram_channel_transfer_' . $channelId]);
+        return PostedTelegramAccountTransfer::channelTransferMarker($channel, $statement->fetchColumn());
+    }
+
+    private function clearTelegramChannelTransferReceipt(int $channelId): void
+    {
+        if ($channelId <= 0) return;
+        $this->pdo->prepare('DELETE FROM posted_app_settings WHERE setting_key=:key')
+            ->execute(['key'=>'telegram_channel_transfer_' . $channelId]);
+    }
+
+    private function ensureTelegramTransferredChannelBotAuthority(array $channel, array $receipt): bool
+    {
         try {
-            $result = $this->telegram->call('getChatMember', [
-                'chat_id' => $chatId,
-                'user_id' => $userId,
-            ]);
-            $member = (array) ($result['result'] ?? []);
-            $status = (string) ($member['status'] ?? '');
-            if ($status === '') {
-                return $this->telegramChannelAdminCache[$cacheKey] = null;
+            if ($this->telegramTransferredBotIdCache === null) {
+                $meResponse=$this->telegram->call('getMe');if(($meResponse['ok']??null)!==true)return false;
+                $me = (array) ($meResponse['result'] ?? []);
+                $this->telegramTransferredBotIdCache = is_int($me['id'] ?? null)
+                    && $me['id'] > 0 && ($me['is_bot'] ?? null) === true ? $me['id'] : 0;
             }
-            return $this->telegramChannelAdminCache[$cacheKey] = in_array(
-                $status,
-                ['creator', 'administrator'],
-                true
-            );
+            $botId = $this->telegramTransferredBotIdCache;
+            if ($botId <= 0) return false;
+            $memberResponse=$this->telegram->call('getChatMember', [
+                'chat_id'=>(string) $channel['chat_id'], 'user_id'=>$botId,
+            ]);if(($memberResponse['ok']??null)!==true)return false;
+            $member = (array) ($memberResponse['result'] ?? []);
+            $identity = (array) ($member['user'] ?? []);
+            if (($identity['id'] ?? null) !== $botId || ($identity['is_bot'] ?? null) !== true) return false;
+            $status = (string) ($member['status'] ?? '');
+            if (in_array($status, ['left', 'kicked'], true)) {
+                // A confirmed removal ends this delegated binding. Keep queued
+                // content, but never let a later bot re-add revive an old receipt.
+                $ownsTransaction = !$this->pdo->inTransaction();
+                if ($ownsTransaction) PostedTelegramRootedAccess::begin($this->pdo,$this->config,true);
+                try {
+                    $statement = $this->pdo->prepare('SELECT * FROM posted_channels WHERE id=:id LIMIT 1 FOR UPDATE');
+                    $statement->execute(['id'=>(int) $channel['id']]);
+                    $current = $statement->fetch();
+                    if (is_array($current) && $this->telegramTransferredChannelOwnerReceipt($current) === $receipt) {
+                        $this->pdo->prepare(
+                            'UPDATE posted_channels SET is_active=0,bot_status=:status,bot_can_post=0 WHERE id=:id'
+                        )->execute(['status'=>$status,'id'=>(int) $channel['id']]);
+                        PostedTelegramAuthorityPause::pauseLocked($this->pdo,$current,'bot_removed');
+                        $this->clearTelegramChannelTransferReceipt((int) $channel['id']);
+                    }
+                    if ($ownsTransaction) PostedTelegramRootedAccess::commit($this->pdo);
+                } catch (Throwable $exception) {
+                    if ($ownsTransaction && $this->pdo->inTransaction()) PostedTelegramRootedAccess::rollback($this->pdo);
+                    throw $exception;
+                }
+                return false;
+            }
+            if(!in_array($status,['creator','administrator','member','restricted','left','kicked'],true))return false;
+            if($status==='administrator'&&!is_bool($member['can_post_messages']??null))return false;
+            if($status!=='administrator'||($member['can_post_messages']??null)!==true){$this->telegramAuthorityPauseChannel((int)$channel['id'],(int)$channel['added_by'],'bot_rights_lost');return false;}
+            return true;
         } catch (Throwable $exception) {
-            error_log(
-                'GitPosted could not verify Telegram channel administrator '
-                . $userId . ' in ' . $chatId . ': ' . $exception->getMessage()
-            );
-            return $this->telegramChannelAdminCache[$cacheKey] = null;
+            // Unknown API outcomes do not revoke ownership or cancel schedules.
+            error_log('GitPosted could not verify transferred channel bot authority: ' . get_class($exception));
+            return false;
         }
     }
 
@@ -13938,10 +14807,13 @@ final class PostedBot
         if (!is_array($channel) || empty($channel['is_active'])) {
             return false;
         }
+        if(PostedTelegramAuthorityPause::blocked($this->pdo,$channel))return false;
         $ownerId = (int) ($channel['added_by'] ?? 0);
         if ($ownerId <= 0 || ($expectedOwnerId !== null && $ownerId !== $expectedOwnerId)) {
             return false;
         }
+        $receipt = $this->telegramTransferredChannelOwnerReceipt($channel);
+        if ($receipt !== null) return $this->ensureTelegramTransferredChannelBotAuthority($channel, $receipt);
         $isAdministrator = $this->telegramChannelAdministratorStatus(
             (string) ($channel['chat_id'] ?? ''),
             $ownerId
@@ -13979,11 +14851,11 @@ final class PostedBot
             if($channelId<=0||$ownerId<=0){
                 continue;
             }
-            $isAdministrator=$this->telegramChannelAdministratorStatus(
-                (string)($channel['chat_id']??''),
-                $ownerId
-            );
-            if($isAdministrator===false){
+            $transferred = $this->telegramTransferredChannelOwnerReceipt($channel) !== null;
+            $isAdministrator = $transferred
+                ? $this->ensureTelegramChannelTenure($channelId, $ownerId)
+                : $this->telegramChannelAdministratorStatus((string) ($channel['chat_id'] ?? ''), $ownerId);
+            if(!$transferred && $isAdministrator===false){
                 if(!$this->freezeTelegramChannelOwnership($channelId,$ownerId)){
                     error_log(
                         'GitPosted could not detach stale Telegram owner '
@@ -14006,119 +14878,12 @@ final class PostedBot
         )->execute(['value'=>$this->encodeJson(['checked_at'=>date(DATE_ATOM)])]);
     }
 
-    private function freezeTelegramChannelOwnership(int $channelId, int $expectedOwnerId): bool
+    private function freezeTelegramChannelOwnership(int $channelId,int $expectedOwnerId): bool
     {
-        if ($channelId <= 0 || $expectedOwnerId <= 0) {
-            return false;
-        }
-        $ownsTransaction = !$this->pdo->inTransaction();
-        if ($ownsTransaction) {
-            $this->pdo->beginTransaction();
-        }
-        try {
-            $channelStmt = $this->pdo->prepare(
-                'SELECT added_by FROM posted_channels
-                 WHERE id=:channel LIMIT 1 FOR UPDATE'
-            );
-            $channelStmt->execute(['channel' => $channelId]);
-            if ((int) ($channelStmt->fetchColumn() ?: 0) !== $expectedOwnerId) {
-                if ($ownsTransaction) {
-                    $this->pdo->commit();
-                }
-                return false;
-            }
-            $permissionUsers = $this->pdo->prepare(
-                'SELECT user_id FROM posted_permissions WHERE channel_id=:channel'
-            );
-            $permissionUsers->execute(['channel' => $channelId]);
-            $affectedUsers = array_values(array_unique([
-                $expectedOwnerId,
-                ...array_map('intval', $permissionUsers->fetchAll(PDO::FETCH_COLUMN)),
-            ]));
-            $pendingPins=$this->pdo->prepare(
-                "SELECT post_id
-                 FROM posted_telegram_publish_attempts
-                 WHERE channel_id=:channel AND state='completed'
-                   AND pin_completed_at IS NULL
-                 ORDER BY post_id
-                 FOR UPDATE"
-            );
-            $pendingPins->execute(['channel'=>$channelId]);
-            foreach($pendingPins->fetchAll(PDO::FETCH_COLUMN) as $pendingPinPostId){
-                if(!$this->cancelTelegramPinEffect((int)$pendingPinPostId)){
-                    throw new RuntimeException(
-                        'Telegram pin operation is still running; channel ownership freeze deferred.'
-                    );
-                }
-            }
-            // Losing the authoritative channel tenure closes the old quota
-            // generation. An ambiguous Telegram result stays reserved, but
-            // later reconciliation must not credit a newly-created grant.
-            $this->pdo->prepare(
-                "UPDATE posted_posts post
-                 INNER JOIN posted_telegram_publish_attempts attempt ON attempt.post_id=post.id
-                 SET post.manager_post_quota_charged=0,
-                     post.manager_pin_quota_charged=0
-                 WHERE post.channel_id=:channel
-                   AND (attempt.state<>'completed' OR attempt.gate_channel_id IS NOT NULL)
-                   AND (
-                     post.manager_post_quota_charged=1
-                     OR post.manager_pin_quota_charged=1
-                   )"
-            )->execute(['channel'=>$channelId]);
-            $refundable = $this->pdo->prepare(
-                "SELECT id FROM posted_posts
-                 WHERE channel_id=:channel
-                   AND status IN ('draft','scheduled','failed')
-                   AND (manager_post_quota_charged=1 OR manager_pin_quota_charged=1)
-                 FOR UPDATE"
-            );
-            $refundable->execute(['channel' => $channelId]);
-            foreach ($refundable->fetchAll(PDO::FETCH_COLUMN) as $postId) {
-                $this->refundManagerQuotaForPost((int) $postId);
-            }
-            $this->pdo->prepare(
-                "UPDATE posted_posts
-                 SET status='cancelled',scheduled_at=NULL,publish_started_at=NULL,
-                     repeat_interval_minutes=NULL,repeat_until=NULL,error_text=NULL
-                 WHERE channel_id=:channel
-                   AND status IN ('draft','scheduled','failed')"
-            )->execute(['channel' => $channelId]);
-            $this->pdo->prepare(
-                'UPDATE posted_posts
-                 SET repeat_interval_minutes=NULL,repeat_until=NULL
-                 WHERE channel_id=:channel AND repeat_interval_minutes IS NOT NULL'
-            )->execute(['channel' => $channelId]);
-            $this->pdo->prepare(
-                'UPDATE posted_manager_categories SET is_active=0 WHERE channel_id=:channel'
-            )->execute(['channel' => $channelId]);
-            $this->pdo->prepare(
-                'DELETE FROM posted_permissions WHERE channel_id=:channel'
-            )->execute(['channel' => $channelId]);
-            $detached = $this->pdo->prepare(
-                'UPDATE posted_channels
-                 SET is_active=0,is_archived=0,added_by=NULL
-                 WHERE id=:channel AND added_by=:owner'
-            );
-            $detached->execute(['channel' => $channelId, 'owner' => $expectedOwnerId]);
-            if ($detached->rowCount() !== 1) {
-                throw new RuntimeException('Telegram channel owner changed while access was being frozen.');
-            }
-            foreach ($affectedUsers as $affectedUserId) {
-                $this->clearUserChannelWorkflow($affectedUserId, $channelId);
-            }
-            if ($ownsTransaction) {
-                $this->pdo->commit();
-            }
-            return true;
-        } catch (Throwable $exception) {
-            if ($ownsTransaction && $this->pdo->inTransaction()) {
-                $this->pdo->rollBack();
-            }
-            error_log('GitPosted could not freeze stale Telegram channel ownership: ' . $exception->getMessage());
-            return false;
-        }
+        if($channelId<=0||$expectedOwnerId<=0)return false;
+        return$this->telegramAuthorityPauseChannel($channelId,$expectedOwnerId,'owner_role_lost');
     }
+
 
     private function withOwnedTelegramChannelLock(
         int $ownerId,
@@ -14135,9 +14900,10 @@ final class PostedBot
         }
         $ownsTransaction = !$this->pdo->inTransaction();
         if ($ownsTransaction) {
-            $this->pdo->beginTransaction();
+            PostedTelegramRootedAccess::begin($this->pdo,$this->config,true);
         }
         try {
+            PostedTelegramRootedAccess::requireChannel($this->pdo,$this->config,$ownerId,$channelId);
             $channel = $this->pdo->prepare(
                 'SELECT *
                  FROM posted_channels
@@ -14155,12 +14921,12 @@ final class PostedBot
             }
             $result = $operation($lockedChannel);
             if ($ownsTransaction) {
-                $this->pdo->commit();
+                PostedTelegramRootedAccess::commit($this->pdo);
             }
             return $result;
         } catch (Throwable $exception) {
             if ($ownsTransaction && $this->pdo->inTransaction()) {
-                $this->pdo->rollBack();
+                PostedTelegramRootedAccess::rollback($this->pdo);
             }
             throw $exception;
         }
@@ -14187,9 +14953,10 @@ final class PostedBot
         };
         $ownsTransaction = !$this->pdo->inTransaction();
         if ($ownsTransaction) {
-            $this->pdo->beginTransaction();
+            PostedTelegramRootedAccess::begin($this->pdo,$this->config);
         }
         try {
+            PostedTelegramRootedAccess::requireChannel($this->pdo,$this->config,$userId,$channelId);
             $channel = $this->pdo->prepare(
                 'SELECT *
                  FROM posted_channels
@@ -14222,12 +14989,12 @@ final class PostedBot
             }
             $result = $operation($lockedChannel, $lockedPermission);
             if ($ownsTransaction) {
-                $this->pdo->commit();
+                PostedTelegramRootedAccess::commit($this->pdo);
             }
             return $result;
         } catch (Throwable $exception) {
             if ($ownsTransaction && $this->pdo->inTransaction()) {
-                $this->pdo->rollBack();
+                PostedTelegramRootedAccess::rollback($this->pdo);
             }
             throw $exception;
         }
@@ -14240,7 +15007,9 @@ final class PostedBot
         callable $operation,
         bool $needSchedule = false,
         bool $requireManager = false,
-        bool $requirePost = false
+        bool $requirePost = false,
+        bool $allowAuthorityReviewDate = false,
+        array $planningExtraChannelIds = []
     ): mixed {
         if ($userId <= 0 || $postId <= 0) {
             return null;
@@ -14253,7 +15022,10 @@ final class PostedBot
         if ($channelId <= 0) {
             return null;
         }
-        if (!$this->ensureTelegramChannelTenure($channelId)) {
+        $planningHint=PostedTelegramTopHold::planningSnapshot($this->pdo,$channelId,$planningExtraChannelIds);
+        $reviewChannel=$allowAuthorityReviewDate?$this->channel($channelId):null;
+        $reviewEdit=is_array($reviewChannel)&&PostedTelegramAuthorityPause::canEditReview($this->pdo,$reviewChannel,$userId);
+        if (!$reviewEdit&&!$this->ensureTelegramChannelTenure($channelId)) {
             return null;
         }
 
@@ -14263,30 +15035,26 @@ final class PostedBot
         )));
         $ownsTransaction = !$this->pdo->inTransaction();
         if ($ownsTransaction) {
-            $this->pdo->beginTransaction();
+            PostedTelegramRootedAccess::begin($this->pdo,$this->config);
         }
         try {
+            PostedTelegramRootedAccess::requireChannel($this->pdo,$this->config,$userId,$channelId);
             // Keep this order identical for every user-driven post mutation:
             // channel tenure, post state, then the actor's current permissions.
-            $channelStmt = $this->pdo->prepare(
-                'SELECT *
-                 FROM posted_channels
-                 WHERE id=:channel
-                   AND is_active=1
-                   AND added_by IS NOT NULL
-                   AND added_by>0
-                 LIMIT 1
-                 FOR UPDATE'
-            );
-            $channelStmt->execute(['channel' => $channelId]);
-            $channel = $channelStmt->fetch();
+            $channel=null;foreach($planningHint['channel_ids']as$planningId){
+                $lock=$this->pdo->prepare('SELECT * FROM posted_channels WHERE id=? LIMIT 1 FOR UPDATE');$lock->execute([$planningId]);$locked=$lock->fetch();
+                if(!is_array($locked))throw new PostedTelegramTopHoldException('stale_revision');if($planningId===$channelId)$channel=$locked;
+            }
+            PostedTelegramTopHold::verifyPlanningLocked($this->pdo,$planningHint);
+            if(is_array($channel)&&(empty($channel['is_active'])||(int)($channel['added_by']??0)<=0))$channel=null;
             if (!is_array($channel)) {
                 if ($ownsTransaction) {
-                    $this->pdo->commit();
+                    PostedTelegramRootedAccess::commit($this->pdo);
                 }
                 return null;
             }
 
+            if($reviewEdit&&!PostedTelegramAuthorityPause::canEditReview($this->pdo,$channel,$userId,true))throw new PostedTelegramAuthorityPauseException('stale_review');
             $postStmt = $this->pdo->prepare(
                 'SELECT *
                  FROM posted_posts
@@ -14304,14 +15072,14 @@ final class PostedBot
                 )
             ) {
                 if ($ownsTransaction) {
-                    $this->pdo->commit();
+                    PostedTelegramRootedAccess::commit($this->pdo);
                 }
                 return null;
             }
 
             if (!$this->lockActiveTelegramActor($userId)) {
                 if ($ownsTransaction) {
-                    $this->pdo->commit();
+                    PostedTelegramRootedAccess::commit($this->pdo);
                 }
                 return null;
             }
@@ -14336,19 +15104,19 @@ final class PostedBot
                 || ($requirePost && (int) ($permission['can_post'] ?? 0) !== 1)
             ) {
                 if ($ownsTransaction) {
-                    $this->pdo->commit();
+                    PostedTelegramRootedAccess::commit($this->pdo);
                 }
                 return null;
             }
 
             $result = $operation($post, $channel, $permission);
             if ($ownsTransaction) {
-                $this->pdo->commit();
+                PostedTelegramRootedAccess::commit($this->pdo);
             }
             return $result;
         } catch (Throwable $exception) {
             if ($ownsTransaction && $this->pdo->inTransaction()) {
-                $this->pdo->rollBack();
+                PostedTelegramRootedAccess::rollback($this->pdo);
             }
             throw $exception;
         }
@@ -14413,7 +15181,7 @@ final class PostedBot
              ORDER BY title,id'
         );
         $stmt->execute(['owner' => $userId]);
-        return $stmt->fetchAll();
+        return array_values(array_filter($stmt->fetchAll(),fn(array $c):bool=>PostedTelegramRootedAccess::channel($this->pdo,$this->config,$userId,(int)$c['id'])));
     }
 
     private function channelByChatId(string $chatId): ?array
@@ -14563,7 +15331,7 @@ final class PostedBot
         $stmt = $this->pdo->prepare('SELECT * FROM posted_templates WHERE id = :id LIMIT 1');
         $stmt->execute(['id' => $templateId]);
         $row = $stmt->fetch();
-        return is_array($row) ? $row : null;
+        return is_array($row) ? PostedTelegramTemplateMedia::hydrate($this->pdo,$row) : null;
     }
 
     private function templateTitle(string $text, string $mediaType): string
@@ -14858,6 +15626,11 @@ final class PostedBot
 
     private function telegramPreviewPlan(array $post,string $prefixText=''):array
     {
+        $post=PostedTelegramPostOptions::freeze($this->pdo,$post);
+        $post=PostedTelegramTransportLayout::preview($post);
+        $post=PostedTelegramCaptionPlacement::preview($this->pdo,$post);
+        $native=$this->telegramNativePreviewPlan($post,$prefixText);if($native!==null)return$native;
+        $options=$this->telegramPostOptions($post);
         $payload=$this->effectivePostPayload($post);
         $text=(string)$payload['text'];
         $entities=(array)($payload['entities']??[]);
@@ -14870,6 +15643,7 @@ final class PostedBot
                 $this->telegramUtf16Length($separator)
             );
         }
+        PostedTelegramCaptionPlacement::assertCaption($post,$text);
         $media=$this->postMedia($post);
         if($text===''&&$media===[]){
             $text='[медиа без текста]';
@@ -14882,7 +15656,7 @@ final class PostedBot
             ||$types===['audio']
         );
         $mode=$media===[]?'none':(count($media)===1?'single':($groupable?'group':'sequence'));
-        $caption=$media!==[]&&$text!==''&&$this->telegramUtf16Length($text)<=self::PHOTO_CAPTION_LIMIT
+        $caption=$media!==[]&&$text!==''&&PostedTelegramTransportLayout::length($post,$text)<=self::PHOTO_CAPTION_LIMIT
             ?$text
             :'';
         $mediaItems=[];
@@ -14891,27 +15665,35 @@ final class PostedBot
                 'type'=>(string)$item['type'],
                 'media'=>(string)$item['file_id'],
             ];
+            if($options['media_spoiler']&&in_array($item['type'],['photo','video','animation'],true))$entry['has_spoiler']=true;
             if($index===0&&$caption!==''){
                 $entry['caption']=$caption;
                 if($entities!==[])$entry['caption_entities']=$entities;
             }
-            $mediaItems[]=$entry;
+            if($mode==='single')$entry=PostedTelegramCaptionPlacement::project($post,$entry);
+            $mediaItems[]=($mode==='group'&&$options['paid_media_stars']===null)?PostedTelegramCaptionVector::project($post,$index,$entry):$entry;
         }
         $textParts=$caption===''&&$text!==''
-            ?$this->splitTelegramFormattedText($text,$entities)
+            ?$this->splitTelegramFormattedTextForLayout($post,$text,$entities)
             :[];
-        $fingerprint=hash('sha256',$this->encodeJson([
+        if($options['paid_media_stars']!==null){
+            if(!$this->telegramMediaOptionCapabilities($post)['paid'])throw new InvalidArgumentException('Платное медиа недоступно для этого поста.');
+            $mode='paid';
+        }
+        $fingerprintData=[
             'version'=>1,
             'mode'=>$mode,
             'media'=>$mediaItems,
             'text_parts'=>$textParts,
             'link_preview'=>$this->linkPreviewExtra($post),
-        ]));
+        ];
+        if($mode==='paid')$fingerprintData['paid_media_stars']=$options['paid_media_stars'];
+        $fingerprint=hash('sha256',$this->encodeJson($fingerprintData));
         return [
             'mode'=>$mode,
             'media'=>$mediaItems,
             'text_parts'=>$textParts,
-            'buttons'=>$this->buttonsMarkup((array)$payload['buttons']),
+            'buttons'=>$this->telegramPostInlineButtonsAllowed($post)?$this->buttonsMarkup((array)$payload['buttons']):[],
             'fingerprint'=>$fingerprint,
         ];
     }
@@ -14920,18 +15702,29 @@ final class PostedBot
         int $userId,
         array $post,
         array $plan,
-        array $finalExtra=[]
+        array $finalExtra=[],
+        ?Closure $observer=null
     ):array {
+        $post=PostedTelegramPostOptions::freeze($this->pdo,$post);
+        if(($plan['mode']??null)==='native')return$this->dispatchTelegramNativePreviewPlan($userId,$post,$plan,$finalExtra);
         $results=[];
         $media=(array)($plan['media']??[]);
         $textParts=(array)($plan['text_parts']??[]);
         $mode=(string)($plan['mode']??'none');
         $extraAttached=false;
-        if($mode==='group'){
-            $results[]=$this->telegram->sendMediaGroup($userId,$media);
+        if($mode==='paid'){
+            $payload=$this->effectivePostPayload($post);$caption='';$entities=[];
+            if($textParts===[]&&isset($media[0])){$caption=(string)($media[0]['caption']??'');$entities=(array)($media[0]['caption_entities']??[]);}
+            $paid=$this->telegramPaidMediaPayload($post,$userId,$caption,$entities,$textParts===[]?$finalExtra:[]);
+            unset($paid['protect_content']);
+            $results[]=$this->telegram->call('sendPaidMedia',$paid);if($observer!==null)$observer($results[count($results)-1]);$extraAttached=$textParts===[]&&$finalExtra!==[];
+        }elseif($mode==='group'){
+            $results[]=$this->telegram->sendMediaGroup($userId,$media);if($observer!==null)$observer($results[count($results)-1]);
         }elseif($mode==='single'||$mode==='sequence'){
             foreach($media as $index=>$item){
                 $mediaExtra=[];
+                if(($item['show_caption_above_media']??null)===true)$mediaExtra['show_caption_above_media']=true;
+                if(!empty($item['has_spoiler']))$mediaExtra['has_spoiler']=true;
                 if((array)($item['caption_entities']??[])!==[]){
                     $mediaExtra['caption_entities']=$item['caption_entities'];
                 }
@@ -14950,6 +15743,7 @@ final class PostedBot
                     (string)($item['caption']??''),
                     $mediaExtra
                 );
+                if($observer!==null)$observer($results[count($results)-1]);
             }
         }
         foreach($textParts as $index=>$part){
@@ -14964,9 +15758,10 @@ final class PostedBot
                 (string)($part['text']??''),
                 $partExtra
             );
+            if($observer!==null)$observer($results[count($results)-1]);
         }
         if($finalExtra!==[]&&!$extraAttached){
-            $results[]=$this->telegram->sendMessage($userId,'‎',$finalExtra);
+            $results[]=$this->telegram->sendMessage($userId,'‎',$finalExtra);if($observer!==null)$observer($results[count($results)-1]);
         }
         return $this->messageIdsFromResults($results);
     }
@@ -14981,32 +15776,46 @@ final class PostedBot
             }
             return;
         }
+        if(PostedTelegramNativeContent::isKind($post['media_type']??null)){$this->sendTelegramNativePreview($userId,$post,[],$prefixText);return;}
         $plan=$this->telegramPreviewPlan($post,$prefixText);
         $buttons=(array)($plan['buttons']??[]);
         $extra=$buttons!==[]?['reply_markup'=>['inline_keyboard'=>$buttons]]:[];
         $this->dispatchTelegramPreviewPlan($userId,$post,$plan,$extra);
     }
 
-    private function sendDraftPreview(int $userId, array $post, array $controlKeyboard, string $prefixText = '', ?array $target = null): void
+    private function sendDraftPreview(int $userId, array $post, array $controlKeyboard, string $prefixText = '', ?array $target = null): bool
     {
+        if(PostedTelegramNativeContent::isKind($post['media_type']??null)){$controlKeyboard=$this->telegramWebDraftNextKeyboard($userId,$post,$controlKeyboard);return$this->sendTelegramNativePreview($userId,$post,$controlKeyboard,$prefixText);}
         $postId=(int)($post['id']??0);
-        if($postId<=0)return;
+        if($postId<=0)return false;
+        if($this->telegramDraftPanelBlocksOuterSql($userId,$postId))return false;
+        if(isset($target['album_key']))$controlKeyboard=$this->draftMainKeyboard($post);
+        $controlKeyboard=$this->telegramWebDraftNextKeyboard($userId,$post,$controlKeyboard);
+        $panel=$this->restoreTelegramDraftBoundPanel($userId,$post,$controlKeyboard,$prefixText,$target);
+        if($panel!==null)return$panel;
         try{
-            $this->withTelegramManagedPostLock(
+            $obsolete=$this->withTelegramManagedPostLock(
                 $userId,
                 $postId,
                 ['draft'],
-                function (array $lockedPost) use ($userId, $controlKeyboard, $prefixText, $target): bool {
-                    $this->sendLockedDraftPreview(
+                function (array $lockedPost) use ($userId, $controlKeyboard, $prefixText, $target): array {
+                    $this->assertTelegramAlbumPreviewClaim($lockedPost,$target);
+                    return $this->sendLockedDraftPreview(
                         $userId,
                         $lockedPost,
                         $controlKeyboard,
                         $prefixText,
                         $target
                     );
-                    return true;
                 }
             );
+            if(!is_array($obsolete))return false;
+            // The replacement pointers have COMMITTED before any old bot preview is retired.
+            foreach(array_values(array_unique($obsolete))as$messageId){
+                if(!is_int($messageId)||$messageId<=0)continue;
+                try{$this->telegram->deleteMessage($userId,$messageId);}catch(Throwable){}
+            }
+            return true;
         }catch(Throwable $exception){
             error_log('GitPosted draft preview failed: '.$exception->getMessage());
             try {
@@ -15015,9 +15824,10 @@ final class PostedBot
                 error_log('GitPosted draft preview notice failed: ' . $noticeError->getMessage());
             }
         }
+        return false;
     }
 
-    private function sendLockedDraftPreview(int $userId, array $post, array $controlKeyboard, string $prefixText = '', ?array $target = null): void
+    private function sendLockedDraftPreview(int $userId, array $post, array $controlKeyboard, string $prefixText = '', ?array $target = null): array
     {
         $repostSource = $this->repostForwardSource($post);
         if ($repostSource !== null) {
@@ -15036,7 +15846,7 @@ final class PostedBot
                     ['reply_markup' => ['inline_keyboard' => $controlKeyboard]]
                 );
                 error_log('GitPosted repost preview unavailable; native mode preserved: ' . $exception->getMessage());
-                return;
+                return [];
             }
             $controlText = trim($prefixText);
             $this->telegram->sendMessage(
@@ -15046,7 +15856,7 @@ final class PostedBot
                     : 'Репост принят. Он будет опубликован без изменений. Чтобы изменить текст, медиа или добавить кнопки, выберите «Сделать копией для редактирования».',
                 ['reply_markup' => ['inline_keyboard' => $controlKeyboard]]
             );
-            return;
+            return [];
         }
         $plan=$this->telegramPreviewPlan($post);
         $oldChatId=(string)($post['telegram_preview_chat_id']??'');
@@ -15073,8 +15883,12 @@ final class PostedBot
                 $controlsOnPreview?$controlExtra:[]
             );
 
+        $newMessageIds=PostedTelegramPreviewProof::requireKnownIds(
+            $newMessageIds,PostedTelegramPreviewProof::expectedCount($plan,$controlsOnPreview)
+        );
+        if(!$samePreview&&array_intersect($newMessageIds,array_merge($oldMessageIds,$oldControlId>0?[$oldControlId]:[]))!==[])throw new RuntimeException('A replacement preview reused an old message ID.');
         $controlText=trim($prefixText);
-        $controlText=$controlText!==''?$controlText:'Управление постом';
+        $controlText=$controlText!==''?$controlText:((string)($plan['mode']??'')==='group'?'Настройте пост перед публикацией.':'Управление постом');
         $controlId=0;
         if($controlsOnPreview){
             $candidate=max(0,(int)end($newMessageIds));
@@ -15121,6 +15935,8 @@ final class PostedBot
             $controlId=(int)($control['result']['message_id']??0);
         }
 
+        if($controlId<=0||(!$controlsOnPreview&&in_array($controlId,$newMessageIds,true)))throw new RuntimeException('Preview controls have no distinct known message ID.');
+
         $this->pdo->prepare(
             "UPDATE posted_posts
              SET telegram_preview_chat_id=:chat_id,
@@ -15136,6 +15952,8 @@ final class PostedBot
             'id'=>(int)$post['id'],
         ]);
 
+        $this->confirmTelegramAlbumPreviewLocked($post,$newMessageIds,$controlId,(string)$plan['fingerprint']);
+        $retire=[];
         if(!$samePreview){
             $obsolete=array_merge($oldMessageIds,$oldControlId>0?[$oldControlId]:[]);
             if($target!==null&&!empty($target['has_media'])){
@@ -15144,10 +15962,10 @@ final class PostedBot
             $keep=array_merge($newMessageIds,$controlId>0?[$controlId]:[]);
             foreach(array_values(array_unique($obsolete)) as $messageId){
                 if($messageId<=0||in_array($messageId,$keep,true))continue;
-                try{$this->telegram->deleteMessage($userId,$messageId);}catch(Throwable){}
+                $retire[]=$messageId;
             }
         }elseif($oldControlId>0&&$oldControlId!==$controlId){
-            try{$this->telegram->deleteMessage($userId,$oldControlId);}catch(Throwable){}
+            $retire[]=$oldControlId;
         }
         if(
             $samePreview
@@ -15157,8 +15975,79 @@ final class PostedBot
             &&(int)($target['message_id']??0)>0
             &&(int)$target['message_id']!==$controlId
         ){
-            try{$this->telegram->deleteMessage($userId,(int)$target['message_id']);}catch(Throwable){}
+            $retire[]=(int)$target['message_id'];
         }
+        return array_values(array_unique($retire));
+    }
+
+    private function splitTelegramFormattedTextForLayout(array $post,string $text,array $entities):array
+    {return PostedTelegramTransportLayout::scalar($post)?$this->splitTelegramScalarFormattedText($text,$entities):$this->splitTelegramFormattedText($text,$entities);}
+
+    private function telegramTransportLayoutBehavior(array $post):array
+    {
+        if(!PostedTelegramTransportLayout::scalar($post))return[];
+        $p=$this->effectivePostPayload($post);$text=(string)$p['text'];$entities=(array)$p['entities'];$media=$this->postMedia($post);
+        $oldCaption=$media!==[]&&$this->telegramUtf16Length($text)<=self::PHOTO_CAPTION_LIMIT;
+        $newCaption=$media!==[]&&PostedTelegramTransportLayout::characters($text)<=self::PHOTO_CAPTION_LIMIT;
+        $changed=$oldCaption!==$newCaption;
+        if(!$newCaption&&array_column($this->splitTelegramFormattedText($text,$entities),'text')!==array_column($this->splitTelegramScalarFormattedText($text,$entities),'text'))$changed=true;
+        return$changed?['version'=>1,'metric'=>PostedTelegramTransportLayout::SCALAR]:[];
+    }
+
+    private function splitTelegramScalarFormattedText(string $text, array $entities): array
+    {
+        PostedTelegramTransportLayout::characters($text);
+        if ($text === '') {
+            return [['text'=>'','entities'=>[]]];
+        }
+
+        $entities = $this->normalizeTelegramEntities($text,$entities);
+        $parts = [];
+        $remaining = $text;
+        $utf16Offset = 0;
+        while (PostedTelegramTransportLayout::characters($remaining) > self::TEXT_LIMIT) {
+            $prefixCharacters=self::TEXT_LIMIT;
+            if($prefixCharacters<1){
+                throw new RuntimeException('Unable to split Telegram text at a character boundary.');
+            }
+            $chunk = mb_substr($remaining, 0, $prefixCharacters, 'UTF-8');
+            $newlineAt=mb_strrpos($chunk,"\n",0,'UTF-8');
+            $spaceAt=mb_strrpos($chunk,' ',0,'UTF-8');
+            $breakAt=max(
+                $newlineAt===false?-1:(int)$newlineAt,
+                $spaceAt===false?-1:(int)$spaceAt
+            );
+            if ($breakAt < 1000) {
+                $breakAt = $prefixCharacters;
+            } else {
+                $breakAt++;
+            }
+            $partText = mb_substr($remaining, 0, $breakAt, 'UTF-8');
+            $partLength = $this->telegramUtf16Length($partText);
+            $parts[] = [
+                'text'=>$partText,
+                'entities'=>$this->telegramEntitiesForRange(
+                    $entities,
+                    $utf16Offset,
+                    $partLength
+                ),
+            ];
+            $utf16Offset += $partLength;
+            $remaining = mb_substr($remaining, $breakAt, null, 'UTF-8');
+        }
+        if ($remaining !== '') {
+            $remainingLength = $this->telegramUtf16Length($remaining);
+            $parts[] = [
+                'text'=>$remaining,
+                'entities'=>$this->telegramEntitiesForRange(
+                    $entities,
+                    $utf16Offset,
+                    $remainingLength
+                ),
+            ];
+        }
+
+        return $parts !== [] ? $parts : [['text'=>'','entities'=>[]]];
     }
 
     private function splitTelegramText(string $text): array
@@ -15337,7 +16226,8 @@ final class PostedBot
                 || !empty($message['animation'])
                 || !empty($message['document'])
                 || !empty($message['audio'])
-                || !empty($message['voice']),
+                || !empty($message['voice'])
+                || !empty($message['video_note']) || !empty($message['sticker']) || !empty($message['poll']) || !empty($message['location']) || !empty($message['contact']),
         ];
     }
 
@@ -15426,6 +16316,25 @@ final class PostedBot
     {
         $url = rtrim(trim((string) ($this->config['base_url'] ?? '')), '/');
         return $url !== '' ? $url : 'https://example.com';
+    }
+
+    private function telegramUiLanguage(int $userId): string
+    {
+        if (!isset($this->telegramUiLanguageCache[$userId])) {
+            $this->telegramUiLanguageCache[$userId] = PostedTelegramUi::language($this->pdo, $userId);
+        }
+        return $this->telegramUiLanguageCache[$userId];
+    }
+
+    private function telegramUiText(int $userId, string $key, string $russian, array $parameters = []): string
+    {
+        return $this->telegramUiLanguage($userId) === 'en' ? PostedTelegramUi::englishHtml($key, $parameters) : $russian;
+    }
+
+    private function serviceNewsUsername(): string
+    {
+        $username = ltrim(trim((string) ($this->config['service_news_username'] ?? '')), '@');
+        return preg_match('/^[A-Za-z0-9_]{5,32}$/D', $username) === 1 ? $username : '';
     }
 
     private function serviceAdminUsername(): string

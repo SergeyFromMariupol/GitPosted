@@ -327,7 +327,7 @@ final class InstallerApplication
     private function registerCommands(string $platform, string $token, array $config): void
     {
         if ($platform === 'max') {
-            $expected = gitpostedMaxCommands();
+            $expected = gitpostedMaxCommands($config,true);
             $result = $this->api($platform, $token, 'PATCH', '/me/commands', ['commands' => $expected], $config);
             $actual = $result['commands'] ?? null;
             if (!is_array($actual) || !array_is_list($actual)) {
@@ -348,7 +348,7 @@ final class InstallerApplication
             }
             return;
         }
-        foreach (gitpostedTelegramCommandSets() as $language => $commands) {
+        foreach (gitpostedTelegramCommandSets($config,true) as $language => $commands) {
             $body = ['commands' => $commands];
             if ($language !== 'default') $body['language_code'] = $language;
             $result = $this->api($platform, $token, 'POST', 'setMyCommands', $body, $config);

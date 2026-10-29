@@ -334,9 +334,21 @@ class LimitedWriter(io.IOBase):
     def tell(self): return self.handle.tell()
 
 
+def media_spoiler(message) -> bool:
+    media = getattr(message, "media", None)
+    if kind(media) not in {"MessageMediaPhoto", "MessageMediaDocument"} or not hasattr(media, "spoiler"):
+        reject("UNSUPPORTED_MEDIA", "Не подтверждено состояние спойлера исходного медиа.")
+    flag = media.spoiler
+    # These known TL constructors use flags.N?true: None is an absent flag.
+    if flag is not None and type(flag) is not bool:
+        reject("BAD_RESPONSE", "Некорректное состояние спойлера исходного медиа.")
+    return flag is True
+
+
 def media_description(message) -> tuple[str | None, dict[str, Any], str, int]:
     media = getattr(message, "media", None)
     if media is None or kind(media) == "MessageMediaWebPage": return None, {}, "", 0
+    if kind(media) in {"MessageMediaPhoto", "MessageMediaDocument"}: media_spoiler(message)
     if getattr(media, "ttl_seconds", None):
         reject("UNSUPPORTED_MEDIA", "Самоуничтожающееся медиа нельзя импортировать.")
     if kind(media) == "MessageMediaPhoto" and getattr(media, "photo", None) is not None:
@@ -481,7 +493,7 @@ async def import_post(job: Job, client) -> dict[str, Any]:
                 with path.open("rb") as downloaded:
                     while chunk := downloaded.read(1_048_576): digest.update(chunk)
                 description.update(local_path=str(path), file_size=size)
-                if getattr(getattr(message, "media", None), "spoiler", False): value["has_media_spoiler"] = True
+                value["has_media_spoiler"] = media_spoiler(message)
                 value.update(caption=text, caption_entities=entities)
                 value[media_type] = [description] if media_type == "photo" else description
                 files.append({"path": str(path), "sha256": digest.hexdigest(), "size": size, "mime_type": description["mime_type"], "extension": extension, "message_id": message.id})

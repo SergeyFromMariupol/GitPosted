@@ -61,6 +61,10 @@ if (is_array($config)) {
     if (($config['telegram_bot_enabled'] ?? false) === true) {
         try {
             $result['telegram'] = posted_app()->runCron();
+            // runCron has released its publication lock; this is private UI recovery only.
+            try{$result['telegram_previews']=posted_app()->flushTelegramAlbumPreviews(false,5);}catch(Throwable $previewFailure){$recordFailure('telegram_previews',$previewFailure);}
+            try{$result['telegram_template_previews']=posted_app()->flushTelegramTemplatePreviews(false,5);}catch(Throwable $previewFailure){$recordFailure('telegram_template_previews',$previewFailure);}
+            try{$result['telegram_comments']=posted_app()->maintainTelegramComments(1);}catch(Throwable $commentsFailure){$recordFailure('telegram_comments',$commentsFailure);}
             foreach ((array) ($result['telegram']['errors'] ?? []) as $error) {
                 $recordFailure('telegram', (string) $error);
             }

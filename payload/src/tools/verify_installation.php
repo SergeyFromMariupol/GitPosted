@@ -66,6 +66,11 @@ try {
         );
     }
 
+    // Validate the supported namespace without serializing credentials or contacting the provider.
+    PostedTelegramBillingApi::fromConfig($config);
+    GitPostedMaxPolicy::fromConfig($config);
+    GitPostedMaxTopHold::fromConfig($config);
+
     $pdo = PostedDb::pdo($config);
     PostedDb::assertSchema($pdo);
 

@@ -108,11 +108,11 @@ def settings(value):
     return out
 
 
-def helper(request, timeout=45):
+def helper(request, timeout=45, *, native_clean=False):
     child = None
     try:
         child = subprocess.Popen(['runuser', '-u', p.APP_USER, '--', 'env', 'POSTED_CONFIG_FILE=' + str(p.CONFIG),
-                 '/usr/bin/php', '-d', 'display_errors=0', '-d', 'log_errors=0', p.INSTALL / 'bin/application.php'],
+                 '/usr/bin/php', '-d', 'display_errors=0', '-d', 'log_errors=0', p.INSTALL / ('bin/native-content-enable.php' if native_clean else 'bin/application.php')],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         try:
             raw, _ = child.communicate(input=json.dumps(request).encode(), timeout=timeout)
@@ -330,6 +330,7 @@ class Broker:
                             failure('REVISE_DENIED', 'Боты уже включены или состояние не подтверждено. Продолжите существующую установку.')
                         revised = settings(value.get('settings'))
                         config = self.private.get('config')
+                        native_revision = self.native_reconfiguration(config) if config else None
                         bindings = {platform: self.bot_binding(platform) for platform in ('telegram', 'max')}
                         for platform, token_key in (('telegram', 'bot_token'), ('max', 'max_bot_token')):
                             binding = bindings[platform]
@@ -351,6 +352,9 @@ class Broker:
                                           hcaptcha=revised['hcaptcha'], admin_auth=revised['admin'],
                                           mtproto={'api_id': revised['mtproto']['api_id'], 'api_hash': revised['mtproto']['api_hash'],
                                                    'phone': '', 'two_factor_password': '', 'source_bot': ''})
+                        if native_revision is not None:
+                            native_revision['config_sha256'] = self.native_clean_hash(config)
+                            self.private['native_reconfiguration'] = native_revision
                         self.private['settings'] = revised
                         self.private['bot_bindings'] = bindings
                         for step in job['steps']:
@@ -471,6 +475,237 @@ class Broker:
                         data=json.dumps(config).encode(), safe='Не удалось подготовить конфигурацию.')
         p.atomic(p.CONFIG, encoded, 0o600, *p.identity(p.APP_USER))
 
+    @staticmethod
+    def native_clean_hash(value):
+        return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+    @staticmethod
+    def native_database_identity(config):
+        d = config.get('database', {})
+        if (d.get('host') != 'localhost' or d.get('charset') != 'utf8mb4'
+                or not isinstance(d.get('name'), str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,63}', d['name'])
+                or not isinstance(d.get('user'), str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,31}', d['user'])
+                or not isinstance(d.get('password'), str) or not re.fullmatch(r'[a-f0-9]{64}', d['password'])):
+            failure('DATABASE_IDENTITY', 'Не подтверждены параметры отдельной базы установки.')
+        return {k: d[k] for k in ('host', 'name', 'user', 'charset')}
+
+    def create_database_owned(self, config):
+        identity = self.native_database_identity(config)
+        record = self.private.get('database_creation')
+        if record is None:
+            # Old optimistic database_owned checkpoints are not evidence of a fresh CREATE.
+            if self.private.get('database_owned'):
+                failure('DATABASE_PROVENANCE_REQUIRED', 'Происхождение базы не подтверждено. Автоматическое принятие существующей базы запрещено.')
+            name, user = identity['name'], identity['user']
+            db_count = p.run(['mysql', '--protocol=socket', '-NBe', "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='" + name + "'"]).strip()
+            user_count = p.run(['mysql', '--protocol=socket', '-NBe', "SELECT COUNT(*) FROM mysql.user WHERE User='" + user + "'"]).strip()
+            if db_count != b'0' or user_count != b'0':
+                failure('DATABASE_EXISTS', 'База или пользователь уже существуют. Автоматическая перезапись запрещена.')
+            record = {'version': 1, 'nonce': secrets.token_hex(16), 'job_id': self.public['job']['id'],
+                      'identity': identity, 'phase': 'database_create_intent', 'requested_at': int(time.time())}
+            self.private['database_creation'] = record
+            self.save()  # Persist BEFORE the only fresh CREATE; an unknown outcome is never adopted.
+            p.run(['mysql', '--protocol=socket', '--binary-mode=1'], data=("CREATE DATABASE `" + name + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n").encode(), safe='Создание новой базы не подтверждено. Автоматический повтор запрещён.')
+            record['phase'] = 'database_created_known'
+            record['created_at'] = int(time.time())
+            self.private['database_owned'] = True  # ONLY after known fresh CREATE, never before.
+            self.save()
+        if (not isinstance(record, dict) or record.get('version') != 1 or record.get('identity') != identity
+                or record.get('job_id') != self.public['job']['id'] or not self.private.get('database_owned')):
+            failure('DATABASE_PROVENANCE_REQUIRED', 'Происхождение базы не подтверждено.')
+        if record.get('phase') in ('database_create_intent', 'user_create_intent'):
+            failure('DATABASE_CREATE_UNKNOWN', 'Результат создания не определён. Автоматическое принятие или удаление запрещено.')
+        if record['phase'] == 'database_created_known':
+            record['phase'] = 'user_create_intent'; self.save()
+            sql = "CREATE USER '" + identity['user'] + "'@'localhost' IDENTIFIED BY '" + config['database']['password'] + "';\n"
+            p.run(['mysql', '--protocol=socket', '--binary-mode=1'], data=sql.encode(), safe='Создание пользователя не подтверждено. Автоматический повтор запрещён.')
+            record['phase'] = 'user_created_known'; self.save()
+        if record['phase'] == 'user_created_known':
+            sql = "GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,ALTER,INDEX,REFERENCES ON `" + identity['name'] + "`.* TO '" + identity['user'] + "'@'localhost';\n"
+            p.run(['mysql', '--protocol=socket', '--binary-mode=1'], data=sql.encode(), safe='Не удалось выдать права подтверждённому пользователю этой базы.')
+            record['phase'] = 'database_ready'; self.save()
+        if record['phase'] != 'database_ready':
+            failure('DATABASE_PROVENANCE_REQUIRED', 'База не готова к созданию схемы.')
+
+    def native_clean_sources(self, config, *, registration_reconcile=False, activation_recovery=False):
+        flags = (config.get('telegram_bot_enabled'), config.get('max_bot_enabled'))
+        selected_flags = tuple(self.private['settings'][platform]['enabled'] for platform in ('telegram', 'max'))
+        permitted_flags = ((False, False), selected_flags) if activation_recovery and registration_reconcile else ((False, False),)
+        if (self.public.get('installed') is not False or (p.STATE / 'installed.json').exists() or flags not in permitted_flags):
+            failure('NATIVE_CLEAN_GATE', 'Активация допустима только до подключения и включения ботов.')
+        registration = None
+        if registration_reconcile:
+            job = self.public.get('job', {})
+            statuses = {step['id']: step.get('status') for step in job.get('steps', [])}
+            if job.get('status') != 'running' or statuses.get('schema') != 'done' or statuses.get('verify') != 'done':
+                failure('NATIVE_REGISTRATION_UNKNOWN', 'Регистрация и проверка ботов должны быть подтверждены до включения.')
+            platforms = {}
+            for platform in ('telegram', 'max'):
+                selected = self.private['settings'][platform]['enabled']
+                binding = self.bot_binding(platform)
+                if selected:
+                    if statuses.get(platform) != 'done' or binding.get('started') is not True or not binding.get('id'):
+                        failure('NATIVE_REGISTRATION_UNKNOWN', 'Регистрация выбранного бота не подтверждена.')
+                elif statuses.get(platform) != 'skipped' or binding.get('started') is not False:
+                    failure('NATIVE_REGISTRATION_UNKNOWN', 'Состояние пропущенной платформы не подтверждено.')
+                platforms[platform] = {'selected': selected, 'status': statuses[platform], 'binding': binding}
+            registration = {'version': 1, 'job_id': job['id'], 'schema_status': 'done', 'verify_status': 'done', 'platforms': platforms}
+        elif any(self.bot_binding(platform)['started'] for platform in ('telegram', 'max')):
+            failure('NATIVE_CLEAN_GATE', 'Первая запись Native запрещена после начала регистрации.')
+        files = p.package_files(p.INSTALL)
+        readers = {name[len('payload/src/'):]: hashlib.sha256(value).hexdigest()
+                   for name, value in sorted(files.items()) if name.startswith('payload/src/')}
+        expected_root = p.APP / 'releases' / p.VERSION / 'src'
+        current = p.APP / 'current'
+        if not current.is_symlink() or current.resolve() / 'src' != expected_root or not expected_root.is_dir():
+            failure('NATIVE_READERS', 'Текущий комплект приложения не подтверждён.')
+        paths = p.validate_source(expected_root)
+        actual = {str(path.relative_to(expected_root)).replace('\\', '/'): hashlib.sha256(path.read_bytes()).hexdigest()
+                  for path in paths if path.is_file()}
+        if not readers or actual != readers:
+            failure('NATIVE_READERS', 'Файлы приложения отличаются от проверенного пакета.')
+        expected_nginx = p.nginx_content(self.public)
+        if p.path_prefix(self.public):
+            expected_nginx = p.gateway._backend('gitposted', expected_nginx)
+        if (p.SITE.is_symlink() or not p.SITE.is_file() or p.SITE.read_bytes() != expected_nginx.encode()
+                or not p.ENABLED_SITE.is_symlink() or os.readlink(p.ENABLED_SITE) != str(p.SITE)
+                or p.ENABLED_SITE.lstat().st_uid != 0):
+            failure('NATIVE_CLEAN_GATE', 'Не подтверждён закрытый веб-вход незавершённой установки.')
+        return {'readers': readers, 'reader_manifest_sha256': self.native_clean_hash(readers),
+                'helper_sha256': hashlib.sha256(files['bin/native-content-enable.php']).hexdigest(),
+                'nginx_sha256': hashlib.sha256(expected_nginx.encode()).hexdigest(),
+                'installation_pending': True, 'bots_not_registered': registration is None,
+                'registration_phase': 'before_registration' if registration is None else 'verified_registration',
+                'registration_proof': registration}
+
+    def native_clean_request(self, config, action, *, allow_insert=False, registration_reconcile=False, activation_recovery=False):
+        record = self.private.get('database_creation')
+        if (not isinstance(record, dict) or record.get('phase') != 'database_ready'
+                or record.get('identity') != self.native_database_identity(config)
+                or record.get('job_id') != self.public['job']['id'] or self.private.get('database_owned') is not True):
+            failure('NATIVE_CLEAN_PROVENANCE', 'Подтверждение новой базы отсутствует; Native остаётся выключенным.')
+        sources = self.native_clean_sources(config, registration_reconcile=registration_reconcile, activation_recovery=activation_recovery)
+        state = self.private.get('native_clean', {})
+        if state and (state.get('reader_manifest_sha256') != sources['reader_manifest_sha256']
+                      or state.get('helper_sha256') != sources['helper_sha256']):
+            failure('NATIVE_READERS', 'Комплект изменился после начала схемы. Автоматическое продолжение запрещено.')
+        return {'action': action, 'creation_receipt': record, 'sources': sources,
+                'phase': state.get('phase', 'before_schema'), 'plan': state.get('plan'),
+                'plan_sha256': state.get('plan_sha256'), 'allow_insert': allow_insert,
+                'activation_intent': self.private.get('native_activation') if activation_recovery else None}
+
+    def initialize_native_clean_schema(self, config):
+        state = self.private.get('native_clean')
+        if state is None or state.get('phase') == 'schema_started':
+            # Read-only partial-schema guard BEFORE ordinary initialization on resume.
+            inspected_request = self.native_clean_request(config, 'inspect')
+            helper(inspected_request, timeout=60, native_clean=True)
+            if state is None:
+                state = {'version': 1, 'phase': 'schema_started',
+                         'reader_manifest_sha256': inspected_request['sources']['reader_manifest_sha256'],
+                         'helper_sha256': inspected_request['sources']['helper_sha256']}
+                self.private['native_clean'] = state; self.save()
+            helper({'action': 'initialize', 'config': config}, timeout=180)
+            state['phase'] = 'schema_seeded'; self.save()
+        if state.get('phase') == 'schema_seeded':
+            inspected = helper(self.native_clean_request(config, 'inspect'), timeout=60, native_clean=True)
+            if inspected.get('complete') is not True or inspected.get('capability_state') != 'absent':
+                failure('NATIVE_CLEAN_SCHEMA', 'Новая схема не готова к явной активации Native.')
+            state.update(plan=inspected['plan'], plan_sha256=inspected['plan_sha256'], phase='enable_started')
+            self.save()  # Unknown/lost child output never turns into another INSERT.
+            result = helper(self.native_clean_request(config, 'enable_clean', allow_insert=True), timeout=60, native_clean=True)
+        elif state.get('phase') in ('enable_started', 'enabled'):
+            result = helper(self.native_clean_request(config, 'enable_clean'), timeout=60, native_clean=True)
+        else:
+            failure('NATIVE_CLEAN_PHASE', 'Не подтверждена стадия активации Native.')
+        if result.get('enabled') is not True:
+            failure('NATIVE_CLEAN_UNKNOWN', 'Активация Native не подтверждена. Автоматический повтор записи запрещён.')
+        state.update(phase='enabled', certificate_sha256=result['certificate_sha256']); self.save()
+
+    def native_reconfiguration(self, config):
+        state = self.private.get('native_clean')
+        if not state or state.get('phase') in ('schema_started', 'schema_seeded'):
+            return None
+        if state.get('phase') != 'enabled':
+            failure('NATIVE_RECONFIGURATION_UNKNOWN', 'Сначала подтвердите исход включения Native без изменения настроек.')
+        old = self.private.get('native_reconfiguration')
+        current = self.native_clean_hash(config)
+        if old is None:
+            if state.get('plan', {}).get('disabled_config_sha256') != current:
+                failure('NATIVE_RECONFIGURATION_UNKNOWN', 'Исходные настройки Native изменились без подтверждённой правки.')
+        elif (not isinstance(old, dict) or set(old) != {'version', 'job_id', 'plan_sha256', 'config_sha256'}
+              or old.get('version') != 1 or old.get('job_id') != self.public['job']['id']
+              or old.get('plan_sha256') != state.get('plan_sha256') or old.get('config_sha256') != current):
+            failure('NATIVE_RECONFIGURATION_UNKNOWN', 'Подтверждение изменения настроек не совпадает.')
+        return {'version': 1, 'job_id': self.public['job']['id'],
+                'plan_sha256': state['plan_sha256'], 'config_sha256': current}
+
+    def verify_native_clean_before_activation(self, config):
+        state = self.private.get('native_clean', {})
+        if state.get('phase') != 'enabled':
+            failure('NATIVE_CLEAN_NOT_ENABLED', 'Native не подтверждён; очереди остаются выключенными.')
+        result = helper(self.native_clean_request(config, 'inspect', registration_reconcile=True), timeout=60, native_clean=True)
+        if (result.get('complete') is not True or result.get('capability_state') != 'same'
+                or result.get('certificate_sha256') != state.get('certificate_sha256')):
+            failure('NATIVE_CLEAN_NOT_ENABLED', 'Native не подтверждён; очереди остаются выключенными.')
+        if result.get('plan_sha256') != state.get('plan_sha256'):
+            # Only an explicit durable wizard revision may change the config component.
+            # The actual readonly inspection must preserve every schema/reader/certificate field.
+            authorization = self.private.get('native_reconfiguration')
+            if authorization is None or authorization != self.native_reconfiguration(config):
+                failure('NATIVE_CLEAN_NOT_ENABLED', 'Изменение настроек Native не подтверждено.')
+            plan = result.get('plan')
+            if not isinstance(plan, dict) or result.get('plan_sha256') != self.native_clean_hash(plan):
+                failure('NATIVE_CLEAN_NOT_ENABLED', 'План Native не подтверждён.')
+            previous = state.get('plan', {})
+            comparable = copy.deepcopy(plan)
+            comparable['disabled_config_sha256'] = previous.get('disabled_config_sha256')
+            if comparable != previous or plan.get('disabled_config_sha256') != self.native_clean_hash(config):
+                failure('NATIVE_CLEAN_NOT_ENABLED', 'Схема или файлы изменились после создания Native.')
+            state.update(plan=plan, plan_sha256=result['plan_sha256'])
+            self.private.pop('native_reconfiguration', None)
+            self.save()  # Metadata only; no capability insertion or schema mutation.
+
+    def activate_native_clean(self, config):
+        selected = {platform: self.private['settings'][platform]['enabled'] for platform in ('telegram', 'max')}
+        actual = helper({'action': 'installation_state'}, timeout=15)
+        if (not isinstance(actual, dict) or set(actual) != {'configured', 'telegram_enabled', 'max_enabled'}
+                or any(type(v) is not bool for v in actual.values()) or actual['configured'] is not True):
+            failure('NATIVE_ACTIVATION_UNKNOWN', 'Текущее состояние включения не подтверждено.')
+        current = {'telegram': actual['telegram_enabled'], 'max': actual['max_enabled']}
+        state = self.private.get('native_clean', {})
+        if any(current.values()):
+            intent = self.private.get('native_activation')
+            if current != selected or not isinstance(intent, dict) or state.get('phase') != 'enabled':
+                failure('NATIVE_ACTIVATION_UNKNOWN', 'Неожиданные флаги включения. Автоматическая перезапись запрещена.')
+            result = helper(self.native_clean_request(config, 'inspect_activation', registration_reconcile=True, activation_recovery=True), timeout=60, native_clean=True)
+            if (result.get('activation_reconciled') is not True or result.get('data_writes') != 0
+                    or result.get('certificate_sha256') != state.get('certificate_sha256')
+                    or result.get('plan_sha256') != state.get('plan_sha256')):
+                failure('NATIVE_ACTIVATION_UNKNOWN', 'Исход включения не подтверждён; данные не изменены.')
+            config['telegram_bot_enabled'] = selected['telegram']
+            config['max_bot_enabled'] = selected['max']
+            intent['phase'] = 'config_written_reconciled'
+            self.save()  # Checkpoint only. Never rewrite active config or a capability.
+            return
+        self.verify_native_clean_before_activation(config)
+        sources = self.native_clean_sources(config, registration_reconcile=True)
+        target = copy.deepcopy(config)
+        target['telegram_bot_enabled'] = selected['telegram']; target['max_bot_enabled'] = selected['max']
+        self.private['native_activation'] = {
+            'version': 1, 'phase': 'config_write_started', 'job_id': self.public['job']['id'],
+            'creation_receipt_sha256': self.native_clean_hash(self.private['database_creation']),
+            'plan_sha256': state['plan_sha256'], 'certificate_sha256': state['certificate_sha256'],
+            'reader_manifest_sha256': sources['reader_manifest_sha256'],
+            'registration_proof_sha256': self.native_clean_hash(sources['registration_proof']),
+            'disabled_config_sha256': self.native_clean_hash(config),
+            'target_config_sha256': self.native_clean_hash(target), 'target_flags': selected}
+        self.save()  # Durable exact intent BEFORE the possible activation boundary.
+        config.update(telegram_bot_enabled=selected['telegram'], max_bot_enabled=selected['max'])
+        self.write_config(config)
+        self.private['native_activation']['phase'] = 'config_written_known'
+        self.save()
+
     def install_step(self, step):
         selected = self.private['settings']
         config = self.private.get('config')
@@ -478,6 +713,7 @@ class Broker:
             if not config:
                 config = {'bot_token': selected['telegram']['token'], 'bot_username': '', 'telegram_bot_enabled': False,
                           'max_bot_token': selected['max']['token'], 'max_bot_username': '', 'max_bot_enabled': False,
+                          'telegram_web_window_enabled': True,  # User opt-in stays off; platform flags still gate access.
                           'notification_telegram_id': 0, 'notification_max_id': 0,
                           'timezone': selected['timezone'], 'base_url': self.public.get('site_url', self.public['base_url']),
                           'data_dir': str(p.DATA), 'service_admin_username': selected['support_username'],
@@ -490,28 +726,21 @@ class Broker:
                           'database': {'host': 'localhost', 'name': 'GitPosted', 'user': 'gitposted_app', 'password': secrets.token_hex(32), 'charset': 'utf8mb4'}}
                 self.private['config'] = config
                 self.save()
-            if not self.private.get('database_owned'):
-                existing = p.run(['mysql', '--protocol=socket', '-NBe', "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='GitPosted'"]).strip()
-                existing_user = p.run(['mysql', '--protocol=socket', '-NBe', "SELECT COUNT(*) FROM mysql.user WHERE User='gitposted_app'"]).strip()
-                if existing != b'0' or existing_user != b'0':
-                    failure('DATABASE_EXISTS', 'База или пользователь уже существуют. Автоматическая перезапись запрещена.')
-                self.private['database_owned'] = True
-                self.save()
-            dbpass = config['database']['password']  # Generated hex only; sent on stdin, never argv.
-            sql = ("CREATE DATABASE IF NOT EXISTS `GitPosted` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\n"
-                   "CREATE USER IF NOT EXISTS 'gitposted_app'@'localhost' IDENTIFIED BY '" + dbpass + "';\n"
-                   "GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,ALTER,INDEX,REFERENCES ON `GitPosted`.* TO 'gitposted_app'@'localhost';\n")
-            p.run(['mysql', '--protocol=socket', '--binary-mode=1'], data=sql.encode(), safe='Не удалось создать отдельную базу приложения.')
+            self.create_database_owned(config)
         elif step == 'config':
+            revision = self.native_reconfiguration(config) if self.private.get('native_reconfiguration') is not None else None
             for platform in ('telegram', 'max'):
                 if selected[platform]['enabled']:
                     checked = helper({'action': 'check', 'platform': platform, 'token': selected[platform]['token']}, timeout=35)
                     identity = self.checked_bot_binding(platform, checked)
                     config['bot_username' if platform == 'telegram' else 'max_bot_username'] = identity['username']
+            if revision is not None:
+                revision['config_sha256'] = self.native_clean_hash(config)
+                self.private['native_reconfiguration'] = revision
             self.save()
             self.write_config(config)
         elif step == 'schema':
-            helper({'action': 'initialize', 'config': config}, timeout=180)
+            self.initialize_native_clean_schema(config)
         elif step in ('telegram', 'max'):
             if not selected[step]['enabled']:
                 return 'skipped'
@@ -531,10 +760,7 @@ class Broker:
         elif step == 'verify':
             helper({'action': 'verify', 'platforms': [x for x in ('telegram', 'max') if selected[x]['enabled']]}, timeout=300)
         elif step == 'activate':
-            config['telegram_bot_enabled'] = selected['telegram']['enabled']
-            config['max_bot_enabled'] = selected['max']['enabled']
-            self.write_config(config)
-            self.save()
+            self.activate_native_clean(config)
         elif step == 'finish':
             candidate = {**self.public, 'installed': True, 'admin_url': config['base_url'] + '/control/'}
             p.configure_nginx(candidate)

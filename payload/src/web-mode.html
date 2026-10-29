@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="referrer" content="no-referrer">
+  <title>GitPosted</title>
+  <link rel="stylesheet" href="?telegram_webapp=1&amp;asset=style"><script src="https://telegram.org/js/telegram-web-app.js" defer></script><script src="?telegram_webapp=1&amp;asset=script" defer></script>
+</head>
+<body>
+<main id="web-mode" class="app">
+  <section id="entry-message" class="entry" aria-live="polite"><h1 id="entry-title">Открываем пост…</h1><p id="entry-description">Проверяем доступ к настройкам.</p></section>
+  <div id="editor" hidden>
+    <div id="initial-step">
+      <section class="duration-section" aria-labelledby="timer-heading">
+        <header class="section-heading"><h2 id="timer-heading">Таймер удаления</h2><div class="heading-controls"><button id="timer-presets-back" class="duration-return" type="button" aria-label="Готовые интервалы" hidden>⌘</button><button id="timer-help" class="help-button" type="button" aria-label="О таймере удаления">?</button></div></header>
+        <div id="timer-presets" class="duration-presets" role="group" aria-labelledby="timer-heading"></div>
+        <div id="timer-custom" class="duration-custom" role="group" aria-labelledby="timer-heading" hidden>
+          <label><input id="timer-days" type="number" min="0" max="60" step="1" inputmode="numeric" autocomplete="off" placeholder="00" aria-label="Таймер удаления: дни"><span>д</span></label>
+          <label><input id="timer-hours" type="number" min="0" max="23" step="1" inputmode="numeric" autocomplete="off" placeholder="00" aria-label="Таймер удаления: часы"><span>ч</span></label>
+          <label><input id="timer-minutes" type="number" min="0" max="59" step="1" inputmode="numeric" autocomplete="off" placeholder="00" aria-label="Таймер удаления: минуты"><span>мин</span></label>
+        </div>
+        <p id="timer-current" class="hint duration-current" hidden></p><p id="timer-warning" class="hint duration-warning" hidden></p>
+      </section>
+      <section class="duration-section" aria-labelledby="repeat-heading">
+        <header class="section-heading"><h2 id="repeat-heading">Автоповтор</h2><div class="heading-controls"><button id="repeat-presets-back" class="duration-return" type="button" aria-label="Готовые интервалы" hidden>⌘</button><button id="repeat-help" class="help-button" type="button" aria-label="Об автоповторе">?</button></div></header>
+        <div id="repeat-presets" class="duration-presets" role="group" aria-labelledby="repeat-heading"></div>
+        <div id="repeat-custom" class="duration-custom duration-custom-repeat" role="group" aria-labelledby="repeat-heading" hidden>
+          <label><input id="repeat-days" type="number" min="0" max="365" step="1" inputmode="numeric" autocomplete="off" placeholder="00" aria-label="Автоповтор: дни"><span>д</span></label>
+          <label><input id="repeat-hours" type="number" min="0" max="23" step="1" inputmode="numeric" autocomplete="off" placeholder="00" aria-label="Автоповтор: часы"><span>ч</span></label>
+        </div>
+        <p id="repeat-current" class="hint duration-current" hidden></p><p id="repeat-warning" class="hint" hidden></p><p id="repeat-reason" class="hint" hidden></p>
+      </section>
+      <section id="top-section" class="top-section" aria-labelledby="top-heading" hidden>
+        <div class="top-setting"><h2 id="top-heading">Удержание в топе</h2><button id="top-toggle" type="button" aria-pressed="false" aria-describedby="top-description top-quota">Нет</button></div>
+        <p id="top-description" class="hint"></p><p id="top-quota" class="hint"></p><p id="top-reason" class="hint" hidden></p>
+        <div id="top-block" class="top-block" role="status" aria-live="polite" hidden><p id="top-block-message"></p><a id="top-block-link" target="_blank" rel="noopener noreferrer" hidden>Пост с удержанием в топе</a><button id="top-refresh" type="button" class="quiet">Проверить доступность</button></div>
+      </section>
+      <section id="targets-section" class="multipost-section" aria-labelledby="targets-heading">
+        <header class="section-heading"><h2 id="targets-heading">Мультипостинг</h2><button id="targets-help" class="help-button" type="button" aria-label="О мультипостинге">?</button></header>
+        <div class="mode-tabs" role="group" aria-label="Режим мультипостинга"><button id="mode-copy" type="button" aria-pressed="true">Скопировать</button><button id="mode-forward" type="button" aria-pressed="false">Переслать</button></div>
+        <button id="add-targets" class="add-targets" type="button"><span class="circle-plus" aria-hidden="true">+</span><span>Добавить каналы</span></button>
+        <div id="selected-targets" class="selected-targets" hidden></div>
+        <p id="targets-summary" class="hint" hidden></p><p id="targets-description" class="hint" hidden></p>
+      </section>
+    </div>
+    <section id="date-step" class="secondary-step" hidden aria-labelledby="date-heading">
+      <header class="step-heading"><button id="date-back" class="back-button" type="button">← Назад</button><h2 id="date-heading">Дата публикации</h2></header>
+      <section class="calendar-section" aria-labelledby="calendar-month">
+        <div class="calendar-navigation"><button id="calendar-previous" type="button" aria-label="Предыдущий месяц">‹</button><h3 id="calendar-month" aria-live="polite"></h3><button id="calendar-next" type="button" aria-label="Следующий месяц">›</button></div>
+        <div class="calendar-weekdays" aria-hidden="true"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
+        <div id="calendar-days" class="calendar-days" role="group" aria-label="Дата публикации"></div>
+      </section>
+      <section class="schedule-time-section" aria-labelledby="schedule-time-heading"><h3 id="schedule-time-heading">Время публикации</h3>
+        <div class="schedule-time-fields"><label><span class="visually-hidden">Часы</span><button id="schedule-hour-up" type="button" aria-label="Увеличить часы">⌃</button><input id="schedule-hour" type="number" min="0" max="23" step="1" inputmode="numeric" autocomplete="off" placeholder="00" aria-label="Часы"><button id="schedule-hour-down" type="button" aria-label="Уменьшить часы">⌄</button></label><span class="time-colon" aria-hidden="true">:</span><label><span class="visually-hidden">Минуты</span><button id="schedule-minute-up" type="button" aria-label="Увеличить минуты">⌃</button><input id="schedule-minute" type="number" min="0" max="59" step="1" inputmode="numeric" autocomplete="off" placeholder="00" aria-label="Минуты"><button id="schedule-minute-down" type="button" aria-label="Уменьшить минуты">⌄</button></label></div>
+        <p id="schedule-timezone" class="hint"></p>
+      </section>
+      <section class="calendar-publications" aria-labelledby="calendar-posts-heading"><h3 id="calendar-posts-heading"></h3><p id="calendar-status" class="hint" role="status" aria-live="polite"></p><button id="calendar-retry" type="button" class="quiet" hidden>Повторить загрузку</button><div id="calendar-posts" class="calendar-posts"></div></section>
+    </section>
+    <section id="targets-step" class="secondary-step" hidden aria-labelledby="picker-heading">
+      <header class="step-heading"><button id="targets-back" class="back-button" type="button">← Назад</button><h2 id="picker-heading">Каналы</h2></header>
+      <p id="picker-mode" class="hint"></p><p id="picker-count" class="hint"></p><label class="select-all"><input id="select-all-targets" type="checkbox">Выбрать всё</label>
+      <div id="target-choices" class="targets"></div>
+    </section>
+    <p id="feedback" class="feedback" role="status" aria-live="polite" hidden></p>
+    <section id="operation-panel" class="operation" aria-live="polite" hidden><h2 id="operation-heading">Проверяем публикацию</h2><p id="operation-message"></p><button id="check-operation" class="secondary wide" type="button">Проверить состояние</button></section>
+    <p id="action-reason" class="hint action-reason" hidden></p><button id="reload-state" class="quiet recovery-action" type="button" hidden>Обновить карточку</button>
+    <footer id="main-footer" class="main-footer"><button id="next-step" class="primary wide" type="button">Далее</button></footer>
+  </div>
+  <noscript><section class="entry"><h1>Нужен JavaScript</h1><p>Вернитесь в бота и откройте настройки кнопкой «Далее».</p></section></noscript>
+</main>
+<dialog id="publication-time-dialog" class="popup time-popup" aria-labelledby="publication-time-heading"><header><h2 id="publication-time-heading" tabindex="-1">Время публикации</h2><button id="cancel-publication-time" class="popup-close" type="button" aria-label="Закрыть">×</button></header><p>Вы можете опубликовать пост прямо сейчас или отложить его.</p><div class="popup-actions"><button id="postpone-post" type="button">Отложить</button><button id="publish-post" type="button">Опубликовать</button></div></dialog>
+<dialog id="confirmation-dialog" class="confirmation-page" aria-labelledby="confirmation-heading">
+  <button id="cancel-confirmation" class="confirmation-back" type="button" aria-label="Назад">←</button>
+  <header class="confirmation-hero"><div id="confirmation-illustration" class="confirmation-duck" aria-hidden="true"></div><h2 id="confirmation-heading" tabindex="-1"><span id="confirmation-question">Опубликовать пост в канале </span><span id="confirmation-channel"></span>?</h2><p id="confirmation-summary" class="confirmation-summary" hidden></p></header>
+  <section class="publication-preview" aria-labelledby="preview-heading"><h3 id="preview-heading">Превью</h3><div class="preview-content"><span id="preview-time"></span> <span id="preview-author"></span><span id="preview-text"></span><p id="preview-media" class="hint" hidden>В посте есть медиа. Здесь показан текст подписи.</p><p id="preview-truncated" class="hint" hidden>Превью сокращено.</p></div></section>
+  <p id="confirmation-expired" class="hint confirmation-expired" hidden>Подтверждение устарело. Откройте его заново.</p>
+  <footer id="confirmation-footer" class="main-footer"><button id="confirm-operation" class="primary wide" type="button">Да, опубликовать</button></footer>
+</dialog>
+<dialog id="help-dialog" class="bottom-sheet" aria-labelledby="help-heading"><button id="help-close-x" class="sheet-close" type="button" aria-label="Закрыть">×</button><div id="help-illustration" class="sheet-illustration" aria-hidden="true"></div><h2 id="help-heading" tabindex="-1"></h2><p id="help-message"></p><p id="help-safety" class="hint" hidden></p><footer><button id="close-help" class="primary wide" type="button">Понятно</button></footer></dialog>
+</body></html>

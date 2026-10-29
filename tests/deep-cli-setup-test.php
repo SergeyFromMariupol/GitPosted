@@ -19,7 +19,7 @@ final class DeepCliTelegram {
     public function __construct(string $token) {}
     public function call(string $method, array $body = []): array {
         $fixture =& $GLOBALS['cli_fixture']; $fixture['calls'][] = $method;
-        if ($method === 'getMe') return ['ok' => true, 'result' => ['username' => 'FixtureBot']];
+        if ($method === 'getMe') return ['ok' => true, 'result' => ['id'=>123456,'is_bot'=>true,'username' => 'FixtureBot']];
         if ($method === 'getWebhookInfo') return ['ok' => true, 'result' => $fixture['rows'][0] ?? ['url' => '']];
         if (!empty($fixture['api_fail'])) throw new RuntimeException('Captured transport secret-marker');
         if ($method === 'setWebhook') $fixture['rows'] = [['url' => !empty($fixture['wrong_endpoint']) ? 'https://foreign.example/secret-marker' : $body['url'],
@@ -41,10 +41,12 @@ final class DeepCliMaxApp {
         return ['success' => true, 'unexpected_private' => 'secret-marker'];
     }
     public function subscriptions(): array { return (new DeepCliMaxApi([]))->subscriptions(); }
-    public function setCommands(): array {
-        $fixture =& $GLOBALS['cli_fixture']; $fixture['calls'][] = 'COMMANDS';
+    public function setCommands(bool $attachmentIntent=false): array {
+        $fixture =& $GLOBALS['cli_fixture'];$commands=gitpostedMaxCommands($fixture['config'],$attachmentIntent);
+        if($commands===[])return ['success'=>true,'skipped'=>true];
+        $fixture['calls'][] = 'COMMANDS';
         if (!empty($fixture['api_fail'])) throw new RuntimeException('MAX /subscriptions?url=secret-marker raw error');
-        return ['commands' => gitpostedMaxCommands()];
+        return ['commands' => $commands];
     }
     public function removeSubscription(string $url): void {
         $fixture =& $GLOBALS['cli_fixture']; $fixture['calls'][] = 'DELETE'; $fixture['removed'][] = $url;

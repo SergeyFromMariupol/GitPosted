@@ -9,7 +9,8 @@ trait GitPostedTelegramAccountTransferUi
     {
         return new PostedTelegramAccountTransfer(
             $this->pdo,
-            fn(string $method, array $payload): array => $this->telegram->call($method, $payload)
+            fn(string $method, array $payload): array => $this->telegram->call($method, $payload),
+            fn(int $userId): bool => $this->telegramPolicyOperatorAllowed($userId)
         );
     }
 
@@ -200,12 +201,12 @@ trait GitPostedTelegramAccountTransferUi
     private function showTelegramAccountTransferInput(int $userId, array $data, ?array $target = null): void
     {
         $text = "♻️ ПЕРЕНОС ДАННЫХ\n\n"
-            . "Передайте ваши каналы, публикации, шаблоны и папки другому аккаунту Telegram в этом GitPosted. "
+            . "Передайте ваши каналы, публикации, шаблоны, папки, права доступа и рекламные категории с оставшимися лимитами другому аккаунту Telegram в этом GitPosted. "
             . "Даты, повторы, закреп, удаление и режим репоста сохранятся.\n\n"
-            . "Новый аккаунт должен сначала запустить этого бота командой /start и стать администратором передаваемых каналов. "
-            . "Перенос нужно завершить до удаления старого аккаунта. Для репостов из закрытых источников у нового аккаунта должен быть доступ к этим источникам.\n\n"
+            . "Новый аккаунт должен сначала запустить этого бота командой /start. Заранее выдавать ему права в GitPosted или назначать администратором каналов Telegram не требуется. "
+            . "Бот должен сохранять права публикации в передаваемых каналах. Перенос нужно завершить до удаления старого аккаунта.\n\n"
             . "Отправьте @username или числовой Telegram ID нового аккаунта. Затем вы увидите получателя и подтвердите перенос.\n\n"
-            . "Владение каналами в самом Telegram и ботом в BotFather передаётся отдельно.";
+            . "Владение каналами в самом Telegram и ботом в BotFather передаётся отдельно. Для будущих репостов из закрытых источников получателю может понадобиться доступ к этим источникам.";
         $this->sendOrEditMessage($userId, $text, ['reply_markup' => ['inline_keyboard' => [
             [['text' => 'Отмена', 'callback_data' => 'transfer:cancel:' . (string) $data['token']]],
         ]]], $target);
@@ -219,7 +220,7 @@ trait GitPostedTelegramAccountTransferUi
             . $this->telegramAccountTransferRecipientText($recipient, (int) ($data['target_id'] ?? 0)) . "\n\n"
             . $this->telegramAccountTransferCounts($summary) . "\n\n"
             . "Даты, повторы, закреп, удаление и режим репоста сохранятся. Публикации будут принадлежать указанному аккаунту; "
-            . "владение вашими каналами в GitPosted также перейдёт получателю.\n\n"
+            . "владение вашими каналами в GitPosted, ваши права доступа и рекламные категории с оставшимися лимитами также перейдут получателю. Его существующие данные сохранятся.\n\n"
             . "Проверьте Telegram ID получателя и подтвердите передачу. Подтверждение действует 15 минут с начала подготовки.";
         $token = (string) ($data['token'] ?? '');
         $this->sendOrEditMessage($userId, $text, ['reply_markup' => ['inline_keyboard' => [
@@ -236,7 +237,7 @@ trait GitPostedTelegramAccountTransferUi
         $text = "✅ ПЕРЕНОС ЗАВЕРШЁН\n\n"
             . $this->telegramAccountTransferRecipientText($recipient, $targetId) . "\n\n"
             . $this->telegramAccountTransferCounts((array) ($receipt['result'] ?? [])) . "\n\n"
-            . "Даты и настройки сохранены. Получатель может открыть бота со своего аккаунта и управлять переданными публикациями.\n\n"
+            . "Даты, настройки, права доступа и рекламные лимиты сохранены. Получатель может открыть бота со своего аккаунта и управлять переданными публикациями.\n\n"
             . "Владение каналами в Telegram и ботом в BotFather при необходимости передайте отдельно до удаления старого аккаунта.";
         $this->sendOrEditMessage($userId, $text, ['reply_markup' => ['inline_keyboard' => [
             [['text' => 'Настройки', 'callback_data' => 'settings:root']],
@@ -260,7 +261,9 @@ trait GitPostedTelegramAccountTransferUi
             . "\nПубликаций: " . max(0, (int) ($summary['posts'] ?? 0))
             . "\nИз них запланировано: " . max(0, (int) ($summary['scheduled'] ?? 0))
             . "\nШаблонов: " . max(0, (int) ($summary['templates'] ?? 0))
-            . "\nПапок: " . max(0, (int) ($summary['folders'] ?? 0));
+            . "\nПапок: " . max(0, (int) ($summary['folders'] ?? 0))
+            . "\nДоступов к каналам: " . max(0, (int) ($summary['permissions'] ?? 0))
+            . "\nРекламных категорий: " . max(0, (int) ($summary['categories'] ?? 0));
     }
 
     private function telegramAccountTransferError(int $userId, Throwable $exception): void

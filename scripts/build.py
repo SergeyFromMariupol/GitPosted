@@ -27,7 +27,7 @@ SOURCE_EXTENSIONS = {
     "deploy": {".service", ".socket", ".timer", ".conf", ".ini"},
 }
 PUBLIC_EXTENSIONS = {".css", ".js", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".txt"}
-TOOLS = {"import_emoji_catalog_mtproto.py", "import_post_link_telegram.py", "forward_post_link_telegram.py", "post_link_requirements.txt", "verify_installation.php"}
+TOOLS = {"import_emoji_catalog_mtproto.py", "import_post_link_telegram.py", "forward_post_link_telegram.py", "read_discussion_source_telegram_v3.py", "post_link_requirements.txt", "verify_installation.php"}
 RESOURCES = {"payload/resources/assets/schedule.jpg", "payload/resources/assets/preview-links.png", "payload/resources/certs/russiantrustedca.pem"}
 FORBIDDEN_PARTS = {".git", ".env", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules", "secrets", "backups", "backup", "database", "data", "storage", "runtime", "sessions", "tmp", "logs"}
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo", ".session", ".db", ".sqlite", ".sqlite3", ".sql", ".gz", ".zip", ".bak", ".old", ".orig", ".log", ".key", ".p12", ".pfx", ".dump"}
@@ -66,7 +66,7 @@ def allowed_file(name: str) -> bool:
         return False
     tail = parts[2:]
     if len(tail) == 1:
-        return tail[0] == ".htaccess" or path.suffix == ".php"
+        return tail[0] in {".htaccess", "web-mode.html", "web-mode.js", "web-mode.css"} or path.suffix == ".php"
     if tail[0] == "tools":
         return len(tail) == 2 and tail[1] in TOOLS
     if tail[0] == "assets":

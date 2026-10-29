@@ -90,10 +90,25 @@ try {
         exit;
     }
 
-    posted_app()->handle($update);
+    $telegramAlbumApp=posted_app();
+    $telegramAlbumApp->handle($update);
     posted_webhook_complete($claim);
     $claim = null;
-    echo json_encode(['ok' => true], JSON_UNESCAPED_UNICODE);
+    $telegramReply=json_encode(['ok'=>true],JSON_UNESCAPED_UNICODE);
+    $telegramAlbumTail=$telegramAlbumApp->hasTelegramAlbumPreviewWork()||$telegramAlbumApp->hasTelegramTemplatePreviewWork()||$telegramAlbumApp->hasTelegramCommentsWork();
+    if($telegramAlbumTail&&!headers_sent()){
+        @ini_set('zlib.output_compression','0');if(function_exists('apache_setenv'))@apache_setenv('no-gzip','1');
+        header('Content-Length: '.strlen($telegramReply));header('Connection: close');header('X-Accel-Buffering: no');
+    }
+    echo $telegramReply;
+    if($telegramAlbumTail){
+        ignore_user_abort(true);
+        if(function_exists('fastcgi_finish_request'))fastcgi_finish_request();
+        else{while(ob_get_level()>0){if(!@ob_end_flush())break;}flush();}
+        try{$telegramAlbumApp->flushTelegramAlbumPreviews(true,1);}catch(Throwable $tailError){error_log('GitPosted album tail: '.$tailError::class);}
+        try{$telegramAlbumApp->flushTelegramTemplatePreviews(true,1);}catch(Throwable $tailError){error_log('GitPosted template tail: '.$tailError::class);}
+        try{$telegramAlbumApp->maintainTelegramComments(1);}catch(Throwable $commentsFailure){error_log('GitPosted comments tail: '.$commentsFailure::class);}
+    }
 } catch (Throwable $exception) {
     if (is_array($claim)) posted_webhook_release($claim);
     error_log('GitPosted webhook error: ' . $exception->getMessage());

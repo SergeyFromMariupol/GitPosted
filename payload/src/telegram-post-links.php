@@ -187,6 +187,10 @@ trait GitPostedTelegramPostLinks
 
     private function forwardTelegramRepost(array $post, string $targetChat, int $actorId, string $purpose, array $extra = []): array
     {
+        $batchImport=$this->decodeJson((string)($post['import_json']??''));
+        if(array_key_exists('gitposted_multipost_forward',$batchImport)||array_key_exists('gitposted_multipost_forward_fork',$batchImport)){
+            return $this->telegramMultipostPreviewForward($post,$targetChat,$actorId,$purpose);
+        }
         $source = $this->repostForwardSource($post);
         if ($source === null) throw new InvalidArgumentException('Источник репоста не указан.');
         $import = $this->decodeJson((string) ($post['import_json'] ?? ''));
@@ -198,7 +202,7 @@ trait GitPostedTelegramPostLinks
                 : 'preview:' . $purpose . ':' . bin2hex(random_bytes(16));
             // Once the native sender starts, its typed delivery result owns the
             // outcome. A transport failure must never trigger another send path.
-            return GitPostedTelegramNativeForward::forward($this->config, $post, $targetChat, $actorId, $randomKey, !empty($extra['disable_notification']));
+            return GitPostedTelegramNativeForward::forward($this->config, $post, $targetChat, $actorId, $randomKey, !empty($extra['disable_notification']), ($extra['protect_content']??false)===true);
         }
         $source = $this->resolveTelegramRepostSource($post);
         return $this->telegram->forwardMessage($targetChat, $source['chat_id'], $source['message_id'], $extra);
@@ -312,7 +316,11 @@ trait GitPostedTelegramPostLinks
             $postId = $this->postIdByChannelMessage((int) $channel['id'], $messageId);
             $post = $postId > 0 ? $this->post($postId) : null;
             if (is_array($post)) {
+                $storedOptions=PostedTelegramPostOptions::load($this->pdo,PostedTelegramPostOptions::freeze($this->pdo,$post));
+                if($storedOptions['paid_media_stars']!==null)throw new InvalidArgumentException('Импорт платного медиа пока недоступен. Платное содержимое не будет превращено в обычную копию.');
+                if($storedOptions['media_spoiler'])throw new InvalidArgumentException('Импорт медиа со спойлером по ссылке пока недоступен. Скрытие не будет потеряно при создании копии.');
                 $native = $this->isNativeRepost($post);
+                if($native){$sourceSpoiler=PostedTelegramSourceSpoiler::freeze($this->pdo,$post);if($sourceSpoiler!==null&&($sourceSpoiler['state']==='unknown'||$sourceSpoiler['media_spoiler']===true))throw new InvalidArgumentException('Импорт этого сохранённого репоста по ссылке пока недоступен: состояние спойлера нельзя безопасно перенести. Дублируйте пост и выберите «Сделать копией».');}
                 $payload = $native ? ['text' => (string) ($post['text'] ?? ''), 'entities' => $this->decodeJson((string) ($post['text_entities_json'] ?? '')), 'buttons' => []] : $this->effectivePostPayload($post);
                 $media = $this->postMedia($post);
                 if ((($payload['text'] ?? '') !== '' || $media !== []) && $this->telegramStoredLinkSourceComplete($post, $payload, $media, $messageId, (string) $channel['chat_id'])) {
@@ -322,6 +330,7 @@ trait GitPostedTelegramPostLinks
                         'platform' => 'telegram', 'url' => (string) $parsed['url'], 'chat_id' => (string) $channel['chat_id'],
                         'message_ids' => $ids, 'native_supported' => count($ids) === 1 && count($media) <= 1,
                         'stored_channel_id' => (int) $channel['id'], 'stored_snapshot' => true, 'warnings' => [],
+                        'source_media_spoiler' => false,
                         'forward_origin' => $native ? $this->telegramStoredNativeForwardOrigin($post) : null,
                         'snapshot' => ['text' => (string) $payload['text'], 'entities' => (array) ($payload['entities'] ?? []), 'media' => $media, 'buttons' => (array) ($payload['buttons'] ?? [])],
                     ]);
@@ -394,6 +403,7 @@ trait GitPostedTelegramPostLinks
             if (!is_array($message) || (int) ($message['message_id'] ?? 0) !== $sourceIds[$index]
                 || !hash_equals($chatId, (string) ($message['chat']['id'] ?? ''))) throw new InvalidArgumentException('Нарушен порядок или источник элементов альбома.');
             if (!empty($message['has_protected_content'])) throw new InvalidArgumentException('Источник запрещает сохранение и пересылку содержимого. Импорт недоступен.');
+            if((isset($message['photo'])||isset($message['video'])||isset($message['animation']))&&(!array_key_exists('has_media_spoiler',$message)||!is_bool($message['has_media_spoiler'])))throw new InvalidArgumentException('Loader не подтвердил состояние спойлера исходного медиа. Неполная копия не создана.');
             if (!empty($message['has_media_spoiler'])) throw new InvalidArgumentException('В посте есть медиа со спойлером. Этот редактор пока не сохраняет скрытие медиа; импорт без потери оформления недоступен.');
             foreach (['poll', 'sticker', 'video_note', 'contact', 'location', 'venue', 'dice', 'paid_media'] as $unsupported) {
                 if (isset($message[$unsupported])) throw new InvalidArgumentException('В посте есть неподдерживаемое содержимое (' . $unsupported . '). Неполная копия не создана.');
@@ -416,6 +426,7 @@ trait GitPostedTelegramPostLinks
         return $this->telegramValidateLinkSnapshot([
             'platform' => 'telegram', 'url' => (string) $parsed['url'], 'chat_id' => $chatId, 'message_ids' => $sourceIds,
             'native_supported' => count($sourceIds) === 1 && count($media) <= 1, 'stored_channel_id' => 0, 'stored_snapshot' => false,
+            'source_media_spoiler' => false,
             'forward_origin' => count($messages) === 1 ? ($messages[0]['forward_origin'] ?? null) : null,
             'warnings' => array_values(array_unique(array_filter((array) ($loaded['warnings'] ?? []), static fn(mixed $warning): bool => is_string($warning) && preg_match('/^[A-Z0-9_]{1,80}$/D', $warning) === 1))),
             'snapshot' => compact('text', 'entities', 'media', 'buttons'),
@@ -424,6 +435,7 @@ trait GitPostedTelegramPostLinks
 
     private function telegramValidateLinkSnapshot(array $source): array
     {
+        if(array_key_exists('source_media_spoiler',$source)&&$source['source_media_spoiler']!==false)throw new InvalidArgumentException('Не подтверждено отсутствие спойлера в источнике.');
         $source['forward_origin'] = $this->telegramChannelForwardOrigin($source['forward_origin'] ?? null);
         $snapshot = (array) ($source['snapshot'] ?? []);
         $text = (string) ($snapshot['text'] ?? '');
@@ -510,6 +522,7 @@ trait GitPostedTelegramPostLinks
                 'input_chat' => $native ? $source['chat_id'] : null, 'input_message' => $native ? $source['message_ids'][0] : null, 'import' => $this->encodeJson($import),
             ]);
             $postId = (int) $this->pdo->lastInsertId();
+            if($native&&($source['source_media_spoiler']??null)===false&&$media!==[]&&array_diff(array_column($media,'type'),['photo','video','animation'])===[])PostedTelegramSourceSpoiler::registerVerifiedLinkNativeLocked($this->pdo,$this->post($postId));
             $next = $current;
             $next['post_id'] = $postId;
             $next['revision'] = (int) $current['revision'] + 1;
@@ -529,6 +542,14 @@ trait GitPostedTelegramPostLinks
             if ($mode === 'copy' && !$this->hasStoredRepostCopy($post)) throw new InvalidArgumentException('В черновике не осталось содержимого для копии.');
             $import['mode'] = $mode;
             $native = $mode === 'native';
+            $options=PostedTelegramPostOptions::load($this->pdo,$post);
+            if($native){
+                if($options['media_spoiler']||$options['paid_media_stars']!==null)throw new InvalidArgumentException('Для этих настроек медиа сохраните режим копии. Перед переключением отключите спойлер или платный пост.');
+                PostedTelegramSourceSpoiler::transitionToNativeLocked($this->pdo,$post,(string)$source['chat_id'],(int)$source['message_ids'][0]);
+            }elseif(PostedTelegramSourceSpoiler::transitionToCopyLocked($this->pdo,$post)){
+                if($options['paid_media_stars']!==null)throw new InvalidArgumentException('Спойлер источника нельзя совмещать с платным постом.');
+                PostedTelegramPostOptions::saveLocked($this->pdo,$post,['media_spoiler'=>true]);
+            }
             $this->pdo->prepare('UPDATE posted_posts SET repost_chat_id=:chat,repost_message_id=:message,repost_input_chat_id=:input_chat,repost_input_message_id=:input_message,import_json=:import WHERE id=:post AND status=\'draft\'')
                 ->execute(['chat' => $native ? $source['chat_id'] : null, 'message' => $native ? $source['message_ids'][0] : null,
                     'input_chat' => $native ? $source['chat_id'] : null, 'input_message' => $native ? $source['message_ids'][0] : null,

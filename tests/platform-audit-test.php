@@ -8,7 +8,7 @@ require_once dirname(__DIR__) . '/payload/src/bot-commands.php';
 $source = file_get_contents(dirname(__DIR__) . '/payload/src/control/index.php');
 $wanted = ['adminTelegramWebhookSnapshot', 'adminTelegramWebhookIsForeign', 'adminAssertTelegramWebhookAccess',
     'adminTelegramWebhookState', 'adminToggleTelegram', 'adminConfigureTelegram', 'adminBotUsername',
-    'adminConfigureTelegramCommands',
+    'adminConfigureTelegramCommands', 'adminReleaseConfigOperationLock', 'adminRefreshTelegramCommandMenus',
     'adminSecretInput', 'adminMaxTokenInput', 'adminMaxSubscriptionRows', 'adminAssertMaxWebhookAccess',
     'adminMaxSubscriptionCount', 'adminMaxSubscriptionIsCurrent', 'adminMaxCurrentSubscriptionCount',
     'adminCreateAndConfirmMaxSubscription', 'adminRemoveAcknowledgedMaxSubscriptions', 'adminRemoveAndConfirmMaxSubscription'];
@@ -39,8 +39,14 @@ if (array_diff($wanted, $loaded) !== []) throw new RuntimeException('Admin decla
 final class PostedTelegram
 {
     public static mixed $transport;
-    public function __construct(private readonly string $token) {}
+    public function __construct(private readonly string $token, private readonly int $requestTimeoutSeconds=30) {}
     public function call(string $method, array $body = []): array { return (self::$transport)($this->token, $method, $body); }
+}
+final class PostedConfig
+{
+    public static array $persisted=[];
+    public static array $reads=[];
+    public static function get():array { self::$reads[]=self::$persisted; return self::$persisted; }
 }
 final class GitPostedMaxBot
 {
@@ -71,7 +77,7 @@ final class GitPostedMaxBot
         $this->rows = array_values(array_filter($this->rows, static fn(array $row): bool => $row['url'] !== $url));
         return ['success' => true];
     }
-    public function setCommands(): array { $this->calls[] = ['COMMANDS']; return ['success' => true]; }
+    public function setCommands(bool $attachmentIntent=false): array { $this->calls[] = ['COMMANDS']; return ['success' => true]; }
 }
 final class GitPostedMaxApi
 {
@@ -79,7 +85,7 @@ final class GitPostedMaxApi
     public function me(): array { return ['user_id' => '222', 'username' => 'LocalMaxBot']; }
 }
 final class PlatformAuditRedirect extends RuntimeException {}
-function adminWriteConfig(string $path, array $config, string $directory): void { $GLOBALS['platform_audit_writes'][] = $config; }
+function adminWriteConfig(string $path, array $config, string $directory): void { $GLOBALS['platform_audit_writes'][] = $config; PostedConfig::$persisted=$config; }
 function adminPage(mixed $page): string { return 'max'; }
 function go(string $message, string $page): never { throw new PlatformAuditRedirect($message); }
 require dirname(__DIR__) . '/payload/src/admin-auth-policy.php';
@@ -207,7 +213,14 @@ $tests['MAX token rotation registers and persists the same retained secret in th
     $actionCode = str_replace("require_once dirname(__DIR__) . '/max-bootstrap.php';", '', substr($source, $start, $end - $start));
     $action = 'max_config'; $baseUrl = 'https://selfhost.example'; $pdo = null;
     $appConfigPath = '/captured/config.php'; $dataDirectory = '/captured';
-    $config = ['max_bot_token' => 'old-fixture-token', 'max_bot_username' => 'LocalMaxBot', 'max_webhook_secret' => str_repeat('s', 64), 'max_bot_enabled' => true];
+    $config = ['max_bot_token' => 'old-fixture-token', 'max_bot_username' => 'LocalMaxBot', 'max_webhook_secret' => str_repeat('s', 64), 'max_bot_enabled' => true,
+        'telegram_bot_enabled'=>false,'telegram_policy'=>'malformed-irrelevant-Telegram-policy'];
+    $oldPersisted=PostedConfig::$persisted;$oldReads=PostedConfig::$reads;
+    PostedConfig::$persisted=$config;PostedConfig::$reads=[];
+    $telegramCalls=[];
+    PostedTelegram::$transport=static function(string $token,string $method,array $body)use(&$telegramCalls):array{
+        $telegramCalls[]=[$method,$body];throw new RuntimeException('MAX-only action must not call Telegram.');
+    };
     $oldPost = $_POST;
     $_POST = ['max_bot_username' => 'LocalMaxBot', 'max_api_base_url' => 'https://platform-api2.max.ru', 'max_bot_token' => 'new-fixture-token'];
     GitPostedMaxBot::$runtimeRows = [['url' => $baseUrl . '/max-webhook.php', 'update_types' => GitPostedMaxBot::webhookUpdateTypes()]];
@@ -220,7 +233,9 @@ $tests['MAX token rotation registers and persists the same retained secret in th
         platformAssert(count($writes) === 1 && count($posts) === 1, 'Unexpected MAX action side effects');
         platformAssert($posts[0][2] === $config['max_webhook_secret'] && $writes[0]['max_webhook_secret'] === $posts[0][2], 'MAX registered a different secret from persisted config');
         platformAssert($writes[0]['max_bot_token'] === 'new-fixture-token' && $writes[0]['max_bot_enabled'] === true, 'MAX replacement did not activate');
-    } finally { $_POST = $oldPost; unset($GLOBALS['platform_audit_writes']); }
+        platformAssert(PostedConfig::$reads!==[]&&PostedConfig::$reads[array_key_last(PostedConfig::$reads)]===$writes[0], 'Menu refresh did not read the persisted effective config');
+        platformAssert($telegramCalls===[], 'Disabled Telegram received an API call during MAX-only attachment');
+    } finally { $_POST = $oldPost; PostedConfig::$persisted=$oldPersisted;PostedConfig::$reads=$oldReads;unset($GLOBALS['platform_audit_writes']); }
 };
 
 $passed = 0;

@@ -104,7 +104,7 @@ $tests = [];
 $tests['initial Telegram installs localized commands and command button after webhook confirmation'] = static function (): void {
     $state = []; $calls = []; $app = deepFixture($state, $calls);
     deepAssert($app->run(['action' => 'register', 'platform' => 'telegram'])['ok'], 'Telegram registration failed');
-    deepAssert($state['tg_commands'] === gitpostedTelegramCommandSets() && $state['tg_menu'] === ['type' => 'commands'], 'Fresh Telegram menu incomplete');
+    deepAssert($state['tg_commands'] === gitpostedTelegramCommandSets(deepConfig(),true) && $state['tg_menu'] === ['type' => 'commands'], 'Fresh Telegram menu incomplete');
     $paths = array_column($calls, 2); $first = array_search('setMyCommands', $paths, true);
     deepAssert($first !== false && $paths[$first - 1] === 'getWebhookInfo', 'Commands preceded endpoint confirmation');
     deepAssert(!in_array('setMyName', $paths, true) && !in_array('sendMessage', $paths, true), 'Unexpected profile or message mutation');
@@ -112,7 +112,7 @@ $tests['initial Telegram installs localized commands and command button after we
 $tests['initial MAX confirms fixed commands before deleting acknowledged foreign URLs and retries idempotently'] = static function (): void {
     $state = ['max' => [['url' => 'https://foreign.example/private', 'update_types' => []]]]; $calls = []; $app = deepFixture($state, $calls);
     for ($attempt = 0; $attempt < 2; ++$attempt) deepAssert($app->run(['action' => 'register', 'platform' => 'max', 'takeover' => true])['ok'], 'MAX registration retry failed');
-    deepAssert($state['max_commands'] === gitpostedMaxCommands() && count($state['max']) === 1, 'MAX menu or endpoint duplicated');
+    deepAssert($state['max_commands'] === gitpostedMaxCommands(deepConfig(),true) && count($state['max']) === 1, 'MAX menu or endpoint duplicated');
     $verbs = array_map(static fn(array $call): string => $call[1] . ' ' . $call[2], $calls);
     deepAssert(array_search('PATCH /me/commands', $verbs, true) < array_search('DELETE /subscriptions', $verbs, true), 'Foreign MAX endpoint removed before commands confirmation');
 };
@@ -160,7 +160,7 @@ $tests['Telegram admin menu failure preserves the confirmed replacement and retu
     deepAssert(!in_array('deleteWebhook', array_column($calls, 0), true), 'Menu failure removed a confirmed endpoint');
     $state['commands_throw'] = false; $same = $writes[0];
     deepAssert(adminConfigureTelegram(new DeepTelegram($same['bot_token']), $same, $same, '123456', static function (array $value) use (&$writes): void { $writes[] = $value; }) === '', 'Menu retry failed');
-    deepAssert($state['commands'] === gitpostedTelegramCommandSets() && $state['menu'] === ['type' => 'commands'], 'Admin menu retry incomplete');
+    deepAssert($state['commands'] === gitpostedTelegramCommandSets($same) && $state['menu'] === ['type' => 'commands'], 'Admin menu retry incomplete');
 };
 $tests['Telegram persistence failure and missing takeover cannot change external menus'] = static function (): void {
     foreach ([false, true] as $takeover) {

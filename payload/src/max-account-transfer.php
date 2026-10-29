@@ -1,6 +1,7 @@
 <?php
 
 declare(strict_types=1);
+require_once __DIR__.'/max-top-hold.php';
 
 /** Move existing MAX records between users without changing account identities. */
 final class PostedMaxAccountTransfer
@@ -131,6 +132,10 @@ final class PostedMaxAccountTransfer
             if (!hash_equals($fingerprint, $result['fingerprint'])) {
                 throw new DomainException('Данные или права изменились во время проверки. Подготовьте перенос заново.');
             }
+            foreach ($scope['channels'] as $channel) {
+                $topSource=GitPostedMaxTopHold::quotaRecord($this->pdo,$channel,$sourceId,true);$topTarget=GitPostedMaxTopHold::quotaRecord($this->pdo,$channel,$targetId,true);
+                GitPostedMaxTopHold::transferQuotasLocked($this->pdo,$channel,$sourceId,$targetId,$topSource,$topTarget);
+            }
             // Keep every timeline, delivery journal and repost source unchanged.
             foreach ($scope['posts'] as $post) {
                 $this->execute('UPDATE posted_max_posts SET author_max_user_id=? WHERE id=? AND author_max_user_id=?', [$targetId, (int)$post['id'], $sourceId]);
@@ -175,6 +180,7 @@ final class PostedMaxAccountTransfer
         $sourceCategories = $this->rows('SELECT * FROM posted_max_manager_categories WHERE max_user_id=? ORDER BY id', [$sourceId]);
         $channelIds = array_map(static fn(array $row): int => (int)$row['id'], $owned);
         foreach ([$posts, $sourceCategories] as $records) foreach ($records as $row) $channelIds[] = (int)$row['channel_id'];
+        $topQuotaChannels=GitPostedMaxTopHold::quotaChannels($this->pdo,$sourceId);$channelIds=[...$channelIds,...$topQuotaChannels];
         $channelIds = array_values(array_unique($channelIds)); sort($channelIds, SORT_NUMERIC);
         if (count($channelIds) > 100) throw new DomainException('За один перенос поддерживается до 100 каналов. Обратитесь к администратору для переноса большого аккаунта.');
         $channels=[]; $channelPosts=[]; $permissions=[]; $categories=[]; $attempts=[]; $deliveries=[]; $edits=[];
@@ -194,12 +200,13 @@ final class PostedMaxAccountTransfer
             'channels'=>$channels, 'posts'=>$posts, 'templates'=>$templates, 'source_categories'=>$sourceCategories,
             'channel_posts'=>$channelPosts, 'permissions'=>$permissions, 'categories'=>$categories,
             'attempts'=>$attempts, 'deliveries'=>$deliveries, 'edits'=>$edits,
-            'native_source_records'=>$this->nativeSourceRecords($posts, $targetId)];
+            'native_source_records'=>$this->nativeSourceRecords($posts, $targetId),
+            'top_quota_channels'=>$topQuotaChannels,'top_sidecars'=>GitPostedMaxTopHold::transferScope($this->pdo,$channels,$channelPosts,$templates,$sourceId,$targetId,$attempts)];
     }
 
     private function validate(array &$scope, string $sourceId, string $targetId, bool $checkMax = true): void
     {
-        if ($scope['owned_ids'] === [] && $scope['posts'] === [] && $scope['templates'] === []) throw new DomainException('У этого аккаунта нет данных для переноса.');
+        if ($scope['owned_ids'] === [] && $scope['posts'] === [] && $scope['templates'] === [] && $scope['top_quota_channels'] === []) throw new DomainException('У этого аккаунта нет данных для переноса.');
         if ($scope['edits'] !== []) throw new DomainException('В одном из каналов открыт редактор публикации. Завершите действие и повторите перенос.');
         foreach ($scope['channel_posts'] as $post) {
             if (in_array($post['status'] ?? '', ['publishing','max_pending'], true)) throw new DomainException('В канале выполняется или подтверждается отправка. Дождитесь подтверждения результата.');

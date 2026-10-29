@@ -68,7 +68,7 @@ try {
         'short_description' => 'Создавайте посты с анимированными эмодзи с помощью ' . $brandName
             . ($supportUsername !== '' ? ".\n\nПоддержка: @" . $supportUsername : '.'),
     ]);
-    $commandSets = gitpostedTelegramCommandSets();
+    $commandSets = gitpostedTelegramCommandSets($config);
     $commands = [];
     foreach ($commandSets as $languageCode => $localizedCommands) {
         $payload = ['commands' => $localizedCommands];

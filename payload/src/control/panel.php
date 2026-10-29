@@ -85,11 +85,13 @@ $pageTitles = [
     'website' => ['Сайт', 'Публичная витрина ' . $siteHostname, 'fa-solid fa-globe'],
     'telegram-data' => ['Данные Telegram', 'Пользователи и каналы Telegram', 'fa-solid fa-paper-plane'],
     'max-data' => ['Данные МАКС', 'Пользователи и каналы МАКС', '/assets/admin/platforms/max.webp'],
+    'subscriptions' => ['Подписки и тарифы', 'Доступ к каналам Telegram и МАКС', 'fa-solid fa-credit-card'],
     'system' => ['Система', 'Интеграции и состояние приложения', 'fa-solid fa-gear'],
 ];
 $navigation = [
     'Главное' => [
         ['overview', 'fa-solid fa-gauge-high', 'Обзор'],
+        ['subscriptions', 'fa-solid fa-credit-card', 'Подписки и тарифы'],
     ],
     'Боты' => [
         ['telegram', '/assets/admin/platforms/telegram.webp', 'Telegram'],
@@ -102,9 +104,45 @@ $navigation = [
     ],
 ];
 $pageTitle = $pageTitles[$page] ?? $pageTitles['overview'];
+if(in_array($page,['telegram','max','subscriptions','system'],true))$pageTitle=['Настройки','Telegram, МАКС, подписки и общие параметры','fa-solid fa-gear'];
 $csrf = (string) ($_SESSION['csrf'] ?? '');
 $telegramBotEnabled = ($config['telegram_bot_enabled'] ?? false) === true;
 $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
+$telegramPolicyFormError='';
+try{$telegramPolicyForm=PostedTelegramPolicy::fromConfig($config);}
+catch(InvalidArgumentException){$telegramPolicyForm=PostedTelegramPolicy::defaults();$telegramPolicyFormError='Настройки доступа повреждены. Бот закрыт до исправления. Укажите оба режима и сохраните настройки.';}
+
+$maxPolicyFormError='';try{$maxPolicyForm=GitPostedMaxPolicy::fromConfig($config);}catch(Throwable){$maxPolicyForm=['version'=>1,'pricing_mode'=>'free','access_mode'=>'open','allowed_max_ids'=>[]];$maxPolicyFormError='Настройки доступа МАКС повреждены. Бот закрыт до исправления. Укажите оба режима и сохраните настройки.';}
+$maxTopPolicyError='';$maxTopQuotaError='';$maxTopQuotaSelected=null;
+try{$maxTopPolicy=PostedTelegramTopHold::fromConfig($config);}catch(Throwable){$maxTopPolicy=PostedTelegramTopHold::defaults();$maxTopPolicyError='Настройки ТОП повреждены. Укажите длительность и сохраните её заново.';}
+if($page==='max'&&(array_key_exists('max_top_channel_id',$_GET)||array_key_exists('max_top_user_id',$_GET))){try{$topChannel=(int)PostedTelegramPolicy::positiveId($_GET['max_top_channel_id']??null);$topUser=$_GET['max_top_user_id']??null;if(!is_string($topUser)||preg_match('/\A[1-9][0-9]{0,18}\z/D',$topUser)!==1)throw new InvalidArgumentException('Некорректный ID МАКС.');$maxTopQuotaSelected=adminMaxTopQuotaView($pdo,$topChannel,$topUser);}catch(Throwable){$maxTopQuotaError='Не удалось открыть лимит. Укажите внутренний ID канала и ID МАКС пользователя с действующими правами.';}}
+$maxLicenseSelected=null;$maxLicenseError='';if($page==='max'&&array_key_exists('max_license_channel_id',$_GET)){try{$maxLicenseSelected=adminMaxLicenseView($pdo,(int)PostedTelegramPolicy::positiveId($_GET['max_license_channel_id']));}catch(Throwable){$maxLicenseError='Не удалось прочитать подписку. Проверьте ID канала и сохранённые данные.';}}
+$telegramTopPolicyError='';$telegramTopQuotaError='';$telegramTopQuotaSelected=null;
+try{$telegramTopPolicy=PostedTelegramTopHold::fromConfig($config);}
+catch(Throwable){$telegramTopPolicy=PostedTelegramTopHold::defaults();$telegramTopPolicyError='Настройки ТОП повреждены. Укажите длительность и сохраните её заново.';}
+if($authorized&&$page==='telegram'&&(isset($_GET['top_channel_id'])||isset($_GET['top_user_id']))){
+    try{$topChannel=(int)PostedTelegramPolicy::positiveId($_GET['top_channel_id']??null);$topUser=(int)PostedTelegramPolicy::positiveId($_GET['top_user_id']??null);
+        $telegramTopQuotaSelected=adminTelegramTopQuotaView($pdo,$topChannel,$topUser);}
+    catch(Throwable){$telegramTopQuotaError='Не удалось открыть лимит. Укажите внутренний ID канала и Telegram ID пользователя с действующими правами.';}
+}
+$billingError='';$billingSelected=null;$billingSearch=null;$billingReview=null;$billingPrices=null;$billingConfigHash=null;
+$billingPlatform='telegram';$billingQuery='';$billingPage='0';$billingZone=PostedAdminChannelLicenses::timezone($config);
+if($authorized&&$page==='subscriptions'){
+    if(!isset($adminBillingView)||!is_array($adminBillingView))throw new RuntimeException('Billing view unavailable.');
+    foreach(['error','selected','search','review','prices','config_hash','platform','query','page','zone']as$billingViewKey)if(!array_key_exists($billingViewKey,$adminBillingView))throw new RuntimeException('Billing view incomplete.');
+    if(!is_string($adminBillingView['error'])||!is_string($adminBillingView['platform'])||!is_string($adminBillingView['query'])||!is_string($adminBillingView['page'])||!($adminBillingView['zone']instanceof DateTimeZone))throw new RuntimeException('Billing view malformed.');
+    foreach(['selected','search','review','prices']as$billingViewKey)if($adminBillingView[$billingViewKey]!==null&&!is_array($adminBillingView[$billingViewKey]))throw new RuntimeException('Billing view malformed.');
+    $billingError=$adminBillingView['error'];
+    $billingSelected=$adminBillingView['selected'];
+    $billingSearch=$adminBillingView['search'];
+    $billingReview=$adminBillingView['review'];
+    $billingPrices=$adminBillingView['prices'];
+    $billingConfigHash=$adminBillingView['config_hash'];
+    $billingPlatform=$adminBillingView['platform'];
+    $billingQuery=$adminBillingView['query'];
+    $billingPage=$adminBillingView['page'];
+    $billingZone=$adminBillingView['zone'];
+}
 ?>
 <!doctype html>
 <html lang="ru">
@@ -179,7 +217,7 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
                 <div class="nav-group">
                     <div class="nav-group__title"><?= e($group) ?></div>
                     <?php foreach ($items as [$target, $icon, $label]): ?>
-                        <a class="nav-item <?= $page === $target ? 'nav-item--active' : '' ?>" href="<?= e(gitpostedAppPath($config, '/control/')) ?>?page=<?= e($target) ?>">
+                        <a class="nav-item <?= $page === $target ? 'nav-item--active' : '' ?>" href="<?= e(gitpostedAppPath($config, '/control/')) ?>?page=<?= e($target) ?>"<?php $settingsLink=['telegram'=>'telegram','max'=>'max','subscriptions'=>'payments','system'=>'common'][$target]??null;if($settingsLink!==null): ?> data-settings-nav="<?= e($settingsLink) ?>" data-settings-link="<?= e($settingsLink) ?>"<?php endif; ?>>
                             <span class="nav-item__icon">
                                 <?php if (str_starts_with($icon, '/')): ?>
                                     <img src="<?= e(gitpostedAppPath($config, $icon)) ?>" alt="">
@@ -233,6 +271,11 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
         <?php endif; ?>
 
         <div class="page-content">
+        <?php if ($authorized && in_array($page,['telegram','max','subscriptions','system'],true)):
+            require_once __DIR__.'/settings-view.php';
+            if(isset($adminSettingsView)&&is_array($adminSettingsView))echo PostedAdminSettingsView::render($adminSettingsView,$csrf,gitpostedAppPath($config,'/control/'));
+        endif; ?>
+
         <?php if ($page === 'overview'): ?>
             <section class="metric-grid">
                 <article class="metric-card">
@@ -252,126 +295,153 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
                 </article>
             </section>
 
-        <?php elseif ($page === 'telegram'): ?>
-            <section class="panel bot-panel bot-panel--telegram" data-bot-panel="telegram" aria-labelledby="telegram-bot-title">
-                <header class="bot-panel__header">
-                    <div class="bot-panel__identity">
-                        <div class="platform-logo platform-logo--telegram platform-logo--large"><?= adminPlatformIcon('telegram') ?></div>
-                        <div class="bot-panel__identity-copy">
-                            <div class="bot-panel__title-row">
-                                <h2 id="telegram-bot-title">@<?= e(ltrim((string) ($config['bot_username'] ?? ''), '@')) ?></h2>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="bot-panel__header-actions">
-                        <form method="post" class="bot-panel__switch-form" aria-label="Состояние Telegram-бота">
-                            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-                            <input type="hidden" name="action" value="bot_toggle">
-                            <input type="hidden" name="return_page" value="telegram">
-                            <input type="hidden" name="platform" value="telegram">
-                            <button class="bot-switch <?= $telegramBotEnabled ? 'bot-switch--on' : 'bot-switch--off' ?>" type="submit" name="enabled" value="<?= $telegramBotEnabled ? '0' : '1' ?>" role="switch" aria-checked="<?= $telegramBotEnabled ? 'true' : 'false' ?>" aria-label="Telegram-бот" title="<?= $telegramBotEnabled ? 'Отключить Telegram-бота' : 'Включить Telegram-бота' ?>">
-                                <span class="bot-switch__copy">
-                                    <strong><?= $telegramBotEnabled ? 'Бот включён' : 'Бот отключён' ?></strong>
-                                </span>
-                                <span class="bot-switch__track" aria-hidden="true"><span class="bot-switch__thumb"></span></span>
-                            </button>
-                        </form>
-                        <button class="icon-button bot-panel__save-button" type="submit" form="telegram-config-form" title="Сохранить" aria-label="Сохранить настройки Telegram"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i></button>
-                    </div>
-                </header>
-
+        <?php elseif ($page === 'subscriptions'): ?>
+            <section id="channel-subscriptions" data-settings-utility="payments" class="panel bot-panel">
                 <div class="bot-panel__section">
-                    <div class="bot-panel__section-head"><h3>Подключение</h3></div>
-                    <dl class="bot-panel__connection-grid">
-                        <div><dt>Конфигурация</dt><dd><?= adminStatus($telegramConfigured, 'Готова', 'Не готова') ?></dd></div>
-                        <div><dt>Токен</dt><dd><?= adminStatus(trim((string) ($config['bot_token'] ?? '')) !== '', 'Задан', 'Не задан') ?></dd></div>
-                        <div><dt>Webhook</dt><dd><code><?= e($baseUrl) ?>/webhook.php</code></dd></div>
-                        <div><dt>Секрет webhook</dt><dd><?= adminStatus(trim((string) ($config['webhook_secret'] ?? '')) !== '', 'Задан', 'Не задан') ?></dd></div>
-                    </dl>
-                </div>
-
-                <div class="bot-panel__section">
-                    <div class="bot-panel__section-head"><h3>Настройки</h3></div>
-                    <form id="telegram-config-form" method="post" class="config-form bot-panel__config-form" autocomplete="off">
-                        <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-                        <input type="hidden" name="action" value="telegram_config">
-                        <input type="hidden" name="return_page" value="telegram">
+                    <div class="bot-panel__section-head"><h2>Подписки каналов</h2></div>
+                    <p>Ручная выдача и отзыв доступа к одному каналу. Платежи не создаются. Посты, расписание, права и лимиты сохраняются.</p>
+                    <p><small>Даты показаны в <?= e($billingZone->getName()) ?> с UTC-смещением. В базе срок хранится в UTC. Периоды — точное количество суток.</small></p>
+                    <?php if($billingError!==''): ?><p role="alert"><?= e($billingError) ?></p><?php endif; ?>
+                    <form method="get" class="config-form bot-panel__config-form">
+                        <input type="hidden" name="page" value="subscriptions">
                         <div class="bot-panel__field-grid">
-                            <label class="field"><span>Username бота</span><input name="bot_username" maxlength="32" value="<?= e(ltrim((string) ($config['bot_username'] ?? ''), '@')) ?>" required></label>
-                            <label class="field"><span>Часовой пояс хранения</span><input name="timezone" value="<?= e($config['timezone'] ?? 'Europe/Moscow') ?>" readonly required><small>Часовой пояс хранения фиксирован. Часовой пояс отображения меняется в настройках бота.</small></label>
-                            <label class="field"><span>Username поддержки (необязательно)</span><input name="service_admin_username" value="<?= e(ltrim((string) ($config['service_admin_username'] ?? ''), '@')) ?>"></label>
-                            <label class="field"><span>Новый токен</span><input name="bot_token" type="password" autocomplete="new-password" placeholder="Пусто — оставить действующий"></label>
-                            <label class="field"><span>Новый секрет webhook</span><input name="webhook_secret" type="password" autocomplete="new-password" placeholder="Пусто — оставить действующий"></label>
-                            <label class="field field--checkbox"><span><input name="takeover_webhook" type="checkbox" value="1"> Перенести бота из другого сервиса</span><small>Разрешаю заменить чужой webhook. Предыдущий сервис перестанет получать события этого бота.</small></label>
-                        </div>
+                            <label class="field"><span>Платформа</span><select name="platform"><option value="telegram" <?= $billingPlatform==='telegram'?'selected':'' ?>>Telegram</option><option value="max" <?= $billingPlatform==='max'?'selected':'' ?>>МАКС</option></select></label>
+                            <label class="field"><span>Канал или владелец</span><input name="q" maxlength="100" value="<?= e($billingQuery) ?>" placeholder="Название, ID, имя или username"></label>
+                        </div><button class="button" type="submit">Найти каналы</button>
+                    </form>
+                    <?php if($billingSearch!==null): ?>
+                        <div class="table-wrap"><table><thead><tr><th>Канал</th><th>Владелец</th><th>Подписка</th><th></th></tr></thead><tbody>
+                        <?php foreach($billingSearch['rows']as$billingRow): $billingSub=$billingRow['subscription']; ?>
+                            <tr><td><?= e($billingRow['title']) ?><br><small>ID <?= e($billingRow['id']) ?> · <?= e($billingRow['chat_id']) ?> · <?= (int)$billingRow['is_active']===1?'активен':'отключён' ?></small></td>
+                                <td><?= e($billingRow['owner_name']??'—') ?><br><small><?= e($billingRow['owner_username']??'') ?> · ID <?= e($billingRow['added_by']??'—') ?></small></td>
+                                <td><?= e($billingSub===null?$billingRow['error']:match($billingSub['state']){'active'=>'Активна','expired'=>'Истекла','revoked'=>'Отозвана',default=>'Не выдана'}) ?><br><small><?= e(PostedAdminChannelLicenses::format($billingSub['license']['expires_at']??null,$billingZone)) ?></small></td>
+                                <td><a class="button button--quiet" href="<?= e(gitpostedAppPath($config, '/control/')) ?>?<?= e(http_build_query(['page'=>'subscriptions','platform'=>$billingPlatform,'q'=>$billingQuery,'list_page'=>$billingPage,'channel_id'=>$billingRow['id']])) ?>">Открыть</a></td></tr>
+                        <?php endforeach; ?>
+                        <?php if($billingSearch['rows']===[]): ?><tr><td colspan="4">Каналы не найдены.</td></tr><?php endif; ?>
+                        </tbody></table></div>
+                        <p><?php if($billingSearch['page']>0): ?><a class="button button--quiet" href="<?= e(gitpostedAppPath($config, '/control/')) ?>?<?= e(http_build_query(['page'=>'subscriptions','platform'=>$billingPlatform,'q'=>$billingQuery,'list_page'=>$billingSearch['page']-1])) ?>">← Назад</a><?php endif; ?>
+                        <?php if($billingSearch['has_more']&&$billingSearch['page']<999): ?><a class="button button--quiet" href="<?= e(gitpostedAppPath($config, '/control/')) ?>?<?= e(http_build_query(['page'=>'subscriptions','platform'=>$billingPlatform,'q'=>$billingQuery,'list_page'=>$billingSearch['page']+1])) ?>">Дальше →</a><?php endif; ?></p>
+                    <?php endif; ?>
+                </div>
+                <?php if($billingSelected!==null): $billingChannel=$billingSelected['channel']; ?>
+                <div class="bot-panel__section">
+                    <div class="bot-panel__section-head"><h3><?= e($billingChannel['title']) ?> · <?= $billingPlatform==='telegram'?'Telegram':'МАКС' ?></h3></div>
+                    <p>ID <?= e($billingChannel['id']) ?> · <?= e($billingChannel['chat_id']) ?> · владелец <?= e($billingChannel['added_by']??'—') ?></p>
+                    <p>Подписка: <?= e(match($billingSelected['state']){'active'=>'активна','expired'=>'истекла','revoked'=>'отозвана',default=>'не выдана'}) ?> · до <?= e(PostedAdminChannelLicenses::format($billingSelected['license']['expires_at']??null,$billingZone)) ?></p>
+                    <form method="post" class="config-form bot-panel__config-form">
+                        <input type="hidden" name="csrf" value="<?= e($csrf) ?>"><input type="hidden" name="action" value="admin_channel_license_review"><input type="hidden" name="return_page" value="subscriptions">
+                        <input type="hidden" name="platform" value="<?= e($billingPlatform) ?>"><input type="hidden" name="channel_id" value="<?= e($billingChannel['id']) ?>"><input type="hidden" name="license_hash" value="<?= e($billingSelected['license_hash']) ?>">
+                        <div class="bot-panel__field-grid">
+                            <label class="field"><span>Выдать или продлить</span><select name="period"><?php foreach(PostedAdminChannelLicenses::DAYS as$billingDays): ?><option value="<?= e($billingDays) ?>"><?= e($billingDays) ?> дней</option><?php endforeach; ?><option value="custom">До своей даты</option></select><small>Активная подписка продлевается от текущего срока. Истёкшая или отозванная начинается сейчас.</small></label>
+                            <label class="field"><span>Своя дата, <?= e($billingZone->getName()) ?></span><input name="custom_expires" type="datetime-local" step="60"><small>Используется только при выборе «До своей даты».</small></label>
+                        </div><button class="button" name="license_action" value="grant" type="submit">Проверить выдачу / продление</button>
+                        <?php if($billingSelected['license']!==null): ?><button class="button button--quiet" name="license_action" value="revoke" type="submit">Проверить отзыв</button><?php endif; ?>
                     </form>
                 </div>
+                <?php endif; ?>
+                <?php if($billingReview!==null): ?>
+                <div class="bot-panel__section">
+                    <div class="bot-panel__section-head"><h3>Проверьте изменение перед сохранением</h3></div>
+                    <?php if($billingReview['kind']==='license'): ?>
+                        <p><?= e($billingReview['channel']['title']) ?> · <?= $billingReview['platform']==='telegram'?'Telegram':'МАКС' ?> · ID <?= e($billingReview['channel']['id']) ?> · <?= e($billingReview['channel']['chat_id']) ?></p>
+                        <p>Владелец: <?= e($billingReview['channel']['added_by']??'—') ?>.</p>
+                        <p>Было: <?= e($billingReview['before']['status']??'не выдана') ?> · <?= e(PostedAdminChannelLicenses::format($billingReview['before']['expires_at']??null,$billingZone)) ?>.<br>
+                        Станет: <?= $billingReview['after']['status']==='active'?'активна':'отозвана' ?> · <?= e(PostedAdminChannelLicenses::format($billingReview['after']['expires_at'],$billingZone)) ?>.</p>
+                        <p><small>Отзыв не удаляет канал и публикации. Доступ через бесплатный пробный режим определяется настройками бота.</small></p>
+                    <?php else: ?>
+                        <p>Общие тарифы за один канал / Telegram и MAX. Валюта — RUB.</p><ul><?php foreach(PostedAdminChannelLicenses::DAYS as$billingDays): ?><li><?= e($billingDays) ?> дней: <?= e($billingReview['before'][$billingDays]) ?> → <?= e($billingReview['after'][$billingDays]) ?> ₽</li><?php endforeach; ?></ul>
+                        <p>Новая цена применяется к новым оформленным платежам. Начатые платежи сохраняют сумму; неподтверждённая старая цена проверяется заново.</p>
+                    <?php endif; ?>
+                    <form method="post" class="config-form bot-panel__config-form">
+                        <input type="hidden" name="csrf" value="<?= e($csrf) ?>"><input type="hidden" name="action" value="<?= $billingReview['kind']==='license'?'admin_channel_license_confirm':'admin_channel_tariffs_confirm' ?>"><input type="hidden" name="return_page" value="subscriptions"><input type="hidden" name="review_nonce" value="<?= e($billingReview['nonce']) ?>">
+                        <button class="button" type="submit">Подтвердить это изменение</button><a class="button button--quiet" href="<?= e(gitpostedAppPath($config, '/control/')) ?>?page=subscriptions">Отмена</a>
+                    </form>
+                </div>
+                <?php endif; ?>
 
-                <div class="bot-panel__section bot-panel__section--metrics">
+            </section>
+        <?php elseif ($page === 'telegram'): ?>
+            <details id="utilities-telegram" data-settings-utility="telegram" class="panel settings-utilities"><summary>Действия с Telegram</summary><div class="bot-panel"><div class="bot-panel__section"><h3>Меню команд</h3><form method="post" class="config-form bot-panel__config-form">
+                        <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
+                        <input type="hidden" name="action" value="telegram_commands_refresh">
+                        <input type="hidden" name="return_page" value="telegram">
+                        <p><small>Обновляет только меню команд включённого Telegram-бота. При частичной ошибке можно повторить без изменения настроек и публикаций.</small></p>
+                        <button class="button" type="submit">Повторить обновление меню команд</button>
+                    </form></div><div class="bot-panel__section"><div class="bot-panel__section-head"><h3>Лимит топов пользователя</h3></div>
+                    <p>Общий остаток пользователя в одном канале, включая обычных редакторов и рекламных менеджеров. Рекламные компании не разделяют этот лимит. Для владельца количество топов не ограничено.</p>
+                    <form method="get" class="config-form bot-panel__config-form">
+                        <input type="hidden" name="page" value="telegram">
+                        <div class="bot-panel__field-grid">
+                            <label class="field"><span>Внутренний ID канала</span><input name="top_channel_id" inputmode="numeric" pattern="[1-9][0-9]*" maxlength="19" value="<?= e($telegramTopQuotaSelected['channel_id']??'') ?>" required></label>
+                            <label class="field"><span>Telegram ID пользователя</span><input name="top_user_id" inputmode="numeric" pattern="[1-9][0-9]*" maxlength="19" value="<?= e($telegramTopQuotaSelected['user_id']??'') ?>" required></label>
+                        </div>
+                        <button class="button" type="submit">Открыть текущий лимит</button>
+                    </form>
+                    <?php if($telegramTopQuotaError!==''): ?><p role="alert"><?= e($telegramTopQuotaError) ?></p><?php endif; ?>
+                    <?php if($telegramTopQuotaSelected!==null): ?>
+                        <p><?= e($telegramTopQuotaSelected['title']) ?> · Telegram ID <?= e($telegramTopQuotaSelected['user_id']) ?></p>
+                        <?php if($telegramTopQuotaSelected['unlimited']): ?><p>Владелец канала: количество топов не ограничено.</p>
+                        <?php else: ?>
+                            <form method="post" class="config-form bot-panel__config-form">
+                                <input type="hidden" name="csrf" value="<?= e($csrf) ?>"><input type="hidden" name="action" value="telegram_top_quota"><input type="hidden" name="return_page" value="telegram">
+                                <input type="hidden" name="top_channel_id" value="<?= e($telegramTopQuotaSelected['channel_id']) ?>"><input type="hidden" name="top_user_id" value="<?= e($telegramTopQuotaSelected['user_id']) ?>"><input type="hidden" name="top_revision" value="<?= e($telegramTopQuotaSelected['quota']['revision']) ?>">
+                                <label class="field"><span>Осталось топов</span><input type="number" name="top_remaining" min="0" max="1000000" step="1" value="<?= e($telegramTopQuotaSelected['quota']['remaining']) ?>" required><small>Сохраняется точный остаток. Если лимит изменился или завершается TOP-отправка, откройте его заново. Права на канал не выдаются и не меняются.</small></label>
+                                <button class="button" type="submit">Сохранить лимит топов</button>
+                            </form>
+                        <?php endif; ?>
+                    <?php endif; ?>
+                </div><div class="bot-panel__section">
+                    <div class="bot-panel__section-head"><h3>Подписка на отдельный канал</h3></div>
+                    <p>Ручная выдача подписки администратором. Подписка привязана к самому каналу и сохраняется при переносе аккаунта.</p>
+                    <form method="post" class="config-form bot-panel__config-form">
+                        <input type="hidden" name="csrf" value="<?= e($csrf) ?>"><input type="hidden" name="action" value="telegram_channel_license"><input type="hidden" name="return_page" value="telegram">
+                        <div class="bot-panel__field-grid">
+                            <label class="field"><span>Канал</span><input name="license_channel_id" inputmode="numeric" pattern="[1-9][0-9]*" list="telegram-license-channels" placeholder="ID канала в GitPosted" required><datalist id="telegram-license-channels"><?php foreach($channels as$licenseChannel): ?><option value="<?= e($licenseChannel['id']) ?>"><?= e($licenseChannel['title'].' · '.$licenseChannel['chat_id']) ?></option><?php endforeach; ?></datalist><small>Выберите из списка или введите внутренний ID канала. Это не Telegram ID пользователя.</small></label>
+                            <label class="field"><span>Действует до, UTC</span><input type="datetime-local" name="license_expires_utc"><small>Срок обязателен для выдачи. Для отзыва оставьте поле пустым.</small></label>
+                        </div>
+                        <button class="button" type="submit" name="license_action" value="grant">Выдать вручную</button>
+                        <button class="button" type="submit" name="license_action" value="revoke">Отозвать</button>
+                    </form>
+                    <?php $telegramLicenseRows=[];foreach($channels as$licenseChannel){try{$license=PostedTelegramPolicy::readLicense($pdo,$licenseChannel);if($license!==null)$telegramLicenseRows[]=['channel'=>$licenseChannel,'license'=>$license];}catch(InvalidArgumentException){$telegramLicenseRows[]=['channel'=>$licenseChannel,'license'=>null];}} ?>
+                    <?php if($telegramLicenseRows!==[]): ?><div class="table-wrap"><table><thead><tr><th>Канал</th><th>Действует до, UTC</th><th>Статус</th></tr></thead><tbody><?php foreach($telegramLicenseRows as$licenseRow): ?><tr><td><?= e($licenseRow['channel']['title'].' · ID '.$licenseRow['channel']['id']) ?></td><td><?= e($licenseRow['license']['expires_at']??'—') ?></td><td><?= e($licenseRow['license']===null?'Повреждена':($licenseRow['license']['status']==='revoked'?'Отозвана':((string)$licenseRow['license']['expires_at']>gmdate('Y-m-d\TH:i:s\Z')?'Активна':'Истекла'))) ?></td></tr><?php endforeach; ?></tbody></table></div><?php endif; ?>
+                </div><div class="bot-panel__section bot-panel__section--metrics">
                     <div class="bot-panel__section-head"><h3>Статистика</h3></div>
                     <div class="bot-panel__metrics" role="group" aria-label="Статистика Telegram">
                         <div class="bot-panel__metric"><span>Пользователи</span><strong><?= e($stats['tg_users'] ?? 0) ?></strong></div>
                         <div class="bot-panel__metric"><span>Каналы</span><strong><?= e($stats['tg_channels'] ?? 0) ?></strong></div>
                         <div class="bot-panel__metric"><span>Публикации</span><strong><?= e($stats['tg_posts'] ?? 0) ?></strong></div>
                     </div>
-                </div>
-            </section>
+                </div></div></details>
 
         <?php elseif ($page === 'max'): ?>
-            <section class="panel bot-panel bot-panel--max" data-bot-panel="max" aria-labelledby="max-bot-title">
-                <header class="bot-panel__header">
-                    <div class="bot-panel__identity">
-                        <div class="platform-logo platform-logo--max platform-logo--large"><?= adminPlatformIcon('max') ?></div>
-                        <div class="bot-panel__identity-copy">
-                            <div class="bot-panel__title-row">
-                                <h2 id="max-bot-title">@<?= e(ltrim((string) ($config['max_bot_username'] ?? ''), '@')) ?></h2>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="bot-panel__header-actions">
-                        <form method="post" class="bot-panel__switch-form" aria-label="Состояние МАКС-бота">
-                            <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-                            <input type="hidden" name="action" value="bot_toggle">
-                            <input type="hidden" name="return_page" value="max">
-                            <input type="hidden" name="platform" value="max">
-                            <button class="bot-switch <?= $maxBotEnabled ? 'bot-switch--on' : 'bot-switch--off' ?>" type="submit" name="enabled" value="<?= $maxBotEnabled ? '0' : '1' ?>" role="switch" aria-checked="<?= $maxBotEnabled ? 'true' : 'false' ?>" aria-label="МАКС-бот" title="<?= $maxBotEnabled ? 'Отключить МАКС-бота' : 'Включить МАКС-бота' ?>">
-                                <span class="bot-switch__copy">
-                                    <strong><?= $maxBotEnabled ? 'Бот включён' : 'Бот отключён' ?></strong>
-                                </span>
-                                <span class="bot-switch__track" aria-hidden="true"><span class="bot-switch__thumb"></span></span>
-                            </button>
-                        </form>
-                        <button class="icon-button bot-panel__save-button" type="submit" form="max-config-form" title="Сохранить" aria-label="Сохранить настройки МАКС"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i></button>
-                    </div>
-                </header>
-
-                <div class="bot-panel__section">
-                    <div class="bot-panel__section-head"><h3>Подключение</h3></div>
-                    <dl class="bot-panel__connection-grid">
-                        <div><dt>Конфигурация</dt><dd><?= adminStatus($maxConfigured && $maxSchemaInstalled, 'Готова', 'Не готова') ?></dd></div>
-                        <div><dt>Токен</dt><dd><?= adminStatus(trim((string) ($config['max_bot_token'] ?? '')) !== '', 'Задан', 'Не задан') ?></dd></div>
-                        <div><dt>Webhook</dt><dd><code><?= e($baseUrl) ?>/max-webhook.php</code></dd></div>
-                        <div><dt>Схема данных</dt><dd><?= adminStatus($maxSchemaInstalled, 'Установлена', 'Не установлена') ?></dd></div>
-                    </dl>
-                </div>
-
-                <div class="bot-panel__section">
-                    <div class="bot-panel__section-head"><h3>Настройки</h3></div>
-                    <form id="max-config-form" method="post" class="config-form bot-panel__config-form" autocomplete="off">
-                        <input type="hidden" name="csrf" value="<?= e($csrf) ?>">
-                        <input type="hidden" name="action" value="max_config">
-                        <input type="hidden" name="return_page" value="max">
+            <details id="utilities-max" data-settings-utility="max" class="panel settings-utilities"><summary>Действия с МАКС</summary><div class="bot-panel"><div class="bot-panel__section"><div class="bot-panel__section-head"><h3>Лимит топов пользователя</h3></div>
+                    <p>Общий остаток пользователя в одном канале, включая обычных редакторов и рекламных менеджеров. Рекламные компании не разделяют этот лимит. Для владельца количество топов не ограничено.</p>
+                    <form method="get" class="config-form bot-panel__config-form">
+                        <input type="hidden" name="page" value="max">
                         <div class="bot-panel__field-grid">
-                            <label class="field"><span>Username бота</span><input name="max_bot_username" maxlength="60" value="<?= e(ltrim((string) ($config['max_bot_username'] ?? ''), '@')) ?>" required></label>
-                            <label class="field"><span>API URL МАКС</span><input name="max_api_base_url" type="url" value="<?= e($config['max_api_base_url'] ?? 'https://platform-api2.max.ru') ?>" readonly required></label>
-                            <label class="field"><span>Новый токен</span><input name="max_bot_token" type="password" autocomplete="new-password" placeholder="Пусто — оставить действующий"></label>
-                            <label class="field"><span>Новый секрет webhook</span><input name="max_webhook_secret" type="password" autocomplete="new-password" placeholder="Пусто — оставить действующий"></label>
-                            <label class="field field--checkbox"><span><input name="takeover_webhook" type="checkbox" value="1"> Перенести бота из другого сервиса</span><small>Разрешаю удалить прежние подписки после подтверждения нового webhook GitPosted.</small></label>
+                            <label class="field"><span>Внутренний ID канала</span><input name="max_top_channel_id" inputmode="numeric" pattern="[1-9][0-9]*" maxlength="19" value="<?= e($maxTopQuotaSelected['channel_id']??'') ?>" required></label>
+                            <label class="field"><span>ID МАКС пользователя</span><input name="max_top_user_id" inputmode="numeric" pattern="[1-9][0-9]*" maxlength="19" value="<?= e($maxTopQuotaSelected['user_id']??'') ?>" required></label>
                         </div>
+                        <button class="button" type="submit">Открыть текущий лимит</button>
                     </form>
-                </div>
-
-                <div class="bot-panel__section bot-panel__section--metrics">
+                    <?php if($maxTopQuotaError!==''): ?><p role="alert"><?= e($maxTopQuotaError) ?></p><?php endif; ?>
+                    <?php if($maxTopQuotaSelected!==null): ?>
+                        <p><?= e($maxTopQuotaSelected['title']) ?> · ID МАКС <?= e($maxTopQuotaSelected['user_id']) ?></p>
+                        <?php if($maxTopQuotaSelected['unlimited']): ?><p>Владелец канала: количество топов не ограничено.</p>
+                        <?php else: ?>
+                            <form method="post" class="config-form bot-panel__config-form">
+                                <input type="hidden" name="csrf" value="<?= e($csrf) ?>"><input type="hidden" name="action" value="max_top_quota"><input type="hidden" name="return_page" value="max">
+                                <input type="hidden" name="max_top_channel_id" value="<?= e($maxTopQuotaSelected['channel_id']) ?>"><input type="hidden" name="max_top_user_id" value="<?= e($maxTopQuotaSelected['user_id']) ?>"><input type="hidden" name="max_top_revision" value="<?= e($maxTopQuotaSelected['quota']['revision']) ?>">
+                                <label class="field"><span>Осталось топов</span><input type="number" name="max_top_remaining" min="0" max="1000000" step="1" value="<?= e($maxTopQuotaSelected['quota']['remaining']) ?>" required><small>Сохраняется точный остаток. Если лимит изменился или завершается TOP-отправка, откройте его заново. Права на канал не выдаются и не меняются.</small></label>
+                                <button class="button" type="submit">Сохранить лимит топов</button>
+                            </form>
+                        <?php endif; ?>
+                    <?php endif; ?>
+                </div><div class="bot-panel__section" id="max-license">
+                    <div class="bot-panel__section-head"><h3>Подписки каналов МАКС</h3></div>
+                    <p>Найдите канал или владельца, проверьте текущий срок и подтвердите выдачу, продление или отзыв.</p>
+                    <a class="button" href="<?= e(gitpostedAppPath($config, '/control/')) ?>?page=subscriptions&amp;platform=max">Открыть подписки и общие тарифы</a>
+                </div><div class="bot-panel__section bot-panel__section--metrics">
                     <div class="bot-panel__section-head"><h3>Статистика</h3></div>
                     <div class="bot-panel__metrics" role="group" aria-label="Статистика МАКС">
                         <div class="bot-panel__metric"><span>Пользователи</span><strong><?= e($stats['max_users_total'] ?? 0) ?></strong></div>
@@ -379,8 +449,7 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
                         <div class="bot-panel__metric"><span>Каналы</span><strong><?= e($stats['max_channels'] ?? 0) ?></strong></div>
                         <div class="bot-panel__metric"><span>Публикации</span><strong><?= e($stats['max_posts'] ?? 0) ?></strong></div>
                     </div>
-                </div>
-            </section>
+                </div></div></details>
 
         <?php elseif ($page === 'website'): ?>
             <section class="hero-panel hero-panel--website">
@@ -404,6 +473,7 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
             </section>
 
         <?php elseif ($page === 'telegram-data'): ?>
+        <?php if(isset($rootedAccessView)&&is_array($rootedAccessView)){require_once __DIR__.'/rooted-access-view.php';echo PostedTelegramRootedAccessView::render($rootedAccessView,$csrf,gitpostedAppPath($config,'/control/'));} ?>
             <div class="messenger-data-grid" data-messenger-data="telegram">
             <section class="panel selection-panel" data-user-table="telegram" data-return-page="telegram-data">
                 <div class="panel__head"><div><div class="eyebrow">УЧЁТНЫЕ ЗАПИСИ</div><h2>Пользователи Telegram</h2></div><div class="selection-toolbar" aria-live="polite"><span class="selection-toolbar__hint">Выберите пользователя</span></div></div>
@@ -518,6 +588,7 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
             </div><!-- /messenger-data-grid -->
 
         <?php else: ?>
+            <div id="system-tools" data-settings-utility="common">
             <section class="panel passkey-panel">
                 <div class="panel__head">
                     <div><div class="eyebrow">БЕЗОПАСНОСТЬ</div><h2>Ключи доступа</h2></div>
@@ -551,6 +622,7 @@ $maxBotEnabled = ($config['max_bot_enabled'] ?? false) === true;
                     </dl>
                 </article>
             </section>
+            </div>
         <?php endif; ?>
         </div>
     </main>

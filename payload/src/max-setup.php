@@ -140,7 +140,7 @@ try {
         'removed_subscription_count' => count($removedSubscriptions),
         'subscription_warnings' => $subscriptionWarnings,
         'webhook' => ['registered' => $setupWebhook],
-        'commands' => ['configured' => true, 'count' => count(gitpostedMaxCommands())],
+        'commands' => ['configured' => true, 'count' => count(gitpostedMaxCommands($config))],
         'seeded_channel_count' => 0,
     ];
     if (!$commandsConfigured) $app->setCommands();

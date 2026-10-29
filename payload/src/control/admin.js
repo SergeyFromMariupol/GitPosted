@@ -232,3 +232,94 @@
         });
     });
 })();
+
+(() => {
+    'use strict';
+    const root = document.querySelector('[data-admin-settings]');
+    if (!root) return;
+    const form = root.querySelector('#admin-settings-form');
+    if (!form) return;
+    const panels = Array.from(form.querySelectorAll('[data-settings-panel]'));
+    const navigation = Array.from(document.querySelectorAll('[data-settings-nav][data-settings-link]'));
+    const category = form.elements.namedItem('settings_category');
+    const save = form.querySelector('#admin-settings-save');
+    const status = form.querySelector('[data-settings-status]');
+    if (!category || !save || !status || panels.length !== 4 || navigation.length !== 4) return;
+    const values = () => Array.from(form.querySelectorAll('[data-settings-value]')).map((field) => [
+        field.name, field.type === 'checkbox' || field.type === 'radio' ? field.checked : field.value,
+    ]);
+    // Values remain in this page's memory, including empty-by-default password fields.
+    const initial = JSON.stringify(values());
+    const failedDraft = root.dataset.settingsPending === '1';
+    const syncPending = root.dataset.settingsSyncPending === '1';
+    let dirty = failedDraft;
+    let submitting = false;
+    const refresh = () => {
+        dirty = failedDraft || JSON.stringify(values()) !== initial;
+        root.dataset.settingsDirty = dirty ? '1' : '0';
+        status.textContent = submitting ? 'Сохраняем изменения…' : (dirty ? 'Есть несохранённые изменения' : (syncPending ? 'Подключение ожидает синхронизации' : 'Нет несохранённых изменений'));
+        save.disabled = submitting || (!dirty && !syncPending);
+    };
+    const activate = (name, focus = false) => {
+        if (!panels.some((panel) => panel.dataset.settingsPanel === name)) return;
+        category.value = name;
+        document.querySelectorAll('[data-settings-utility]').forEach((box) => { box.hidden = box.dataset.settingsUtility !== name; });
+
+        panels.forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== name; });
+        navigation.forEach((link) => {
+            const selected = link.dataset.settingsNav === name;
+            link.classList.toggle('nav-item--active', selected);
+            if (selected) link.setAttribute('aria-current', 'page');
+            else link.removeAttribute('aria-current');
+            if (selected && focus) link.focus();
+        });
+        // Hiding a category never disables its controls; one submit still includes all fields.
+    };
+    root.dataset.settingsEnhanced = '1';
+    panels.forEach((panel) => { panel.setAttribute('role', 'region'); });
+    // Existing sidebar aliases become same-screen category navigation while editing settings.
+    navigation.forEach((link) => {
+        link.addEventListener('click', (event) => {
+            if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+            const name = link.dataset.settingsLink;
+            if (!panels.some((panel) => panel.dataset.settingsPanel === name)) return;
+            event.preventDefault();
+            activate(name, true);
+        });
+    });
+    // Utility actions stay outside the config form. Reuse a loaded card without losing its draft.
+    document.querySelectorAll('[data-settings-tools]').forEach((link) => {
+        link.addEventListener('click', (event) => {
+            if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+            const name = link.dataset.settingsTools;
+            const box = Array.from(document.querySelectorAll('[data-settings-utility]')).find((item) => item.dataset.settingsUtility === name);
+            if (!box) return; // A separate utility page still uses the existing dirty-exit protection.
+            event.preventDefault();
+            activate(name);
+            if (box.tagName === 'DETAILS') box.open = true;
+            box.scrollIntoView({block: 'start'});
+        });
+    });
+    form.addEventListener('input', refresh);
+    form.addEventListener('change', refresh);
+    form.addEventListener('invalid', (event) => {
+        const panel = event.target.closest('[data-settings-panel]');
+        if (panel) activate(panel.dataset.settingsPanel);
+        for (let owner = event.target.parentElement; owner && owner !== form; owner = owner.parentElement) {
+            if (owner.tagName === 'DETAILS') owner.open = true;
+        }
+    }, true);
+    form.addEventListener('submit', () => { submitting = true; refresh(); });
+    window.addEventListener('beforeunload', (event) => {
+        if (!dirty || submitting) return;
+        event.preventDefault();
+        event.returnValue = '';
+    });
+    window.addEventListener('pageshow', () => { submitting = false; refresh(); });
+    const errorPanel = form.querySelector('[aria-invalid="true"]')?.closest('[data-settings-panel]');
+    activate(errorPanel?.dataset.settingsPanel || category.value);
+    if (errorPanel) form.querySelectorAll('[aria-invalid="true"]').forEach((field) => {
+        for (let owner = field.parentElement; owner && owner !== form; owner = owner.parentElement) { if (owner.tagName === 'DETAILS') owner.open = true; }
+    });
+    refresh();
+})();

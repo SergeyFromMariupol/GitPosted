@@ -43,6 +43,7 @@ class ForwardJob:
     random_id: int
     silent: bool
     dry_run: bool
+    protect_content: bool = False
 
     @classmethod
     def parse(cls, value: Any):
@@ -57,7 +58,9 @@ class ForwardJob:
         random_id = loader.positive(value.get("random_id"), 9_223_372_036_854_775_807, "random_id")
         for name in ("silent", "dry_run"):
             if not isinstance(value.get(name), bool): loader.reject("INVALID_JOB", "Некорректные настройки репоста.")
-        return cls(job, source, target, username, random_id, value["silent"], value["dry_run"])
+        protect_content = value.get("protect_content", False)
+        if not isinstance(protect_content, bool): loader.reject("INVALID_JOB", "Некорректная защита пересылки.")
+        return cls(job, source, target, username, random_id, value["silent"], value["dry_run"], protect_content)
 
 
 class ForwardClient(loader.BotClient):
@@ -77,16 +80,16 @@ class ForwardClient(loader.BotClient):
             loader.reject("TARGET_MISMATCH", "Получатель предпросмотра не подтверждён Telegram.")
         return peer
 
-    def validate_forward(self, source, target, message_id: int, random_id: int, silent: bool):
+    def validate_forward(self, source, target, message_id: int, random_id: int, silent: bool, protect_content: bool = False):
         from telethon.tl.functions.messages import ForwardMessagesRequest
         from telethon.utils import get_input_peer
         return ForwardMessagesRequest(
             from_peer=get_input_peer(source), id=[message_id], random_id=[random_id], to_peer=get_input_peer(target),
-            silent=silent, drop_author=False,
+            silent=silent, drop_author=False, noforwards=protect_content,
         )
 
-    async def forward(self, source, target, message_id: int, random_id: int, silent: bool, progress):
-        request = self.validate_forward(source, target, message_id, random_id, silent)
+    async def forward(self, source, target, message_id: int, random_id: int, silent: bool, progress, protect_content: bool = False):
+        request = self.validate_forward(source, target, message_id, random_id, silent, protect_content)
         progress["send_started"] = True
         return await self.client(request)
 
@@ -250,14 +253,14 @@ async def forward_post(plan: ForwardJob, client, progress: dict[str, bool] | Non
                 loader.reject("TARGET_ACCESS_DENIED", "У бота нет права публикации в целевом канале.")
         else:
             target = await client.resolve_actor(plan.target_chat)
-        client.validate_forward(source, target, job.source["message_id"], plan.random_id, plan.silent)
+        client.validate_forward(source, target, job.source["message_id"], plan.random_id, plan.silent, plan.protect_content)
         if not names:
             # Target resolution/permission RPCs can be slow; recheck the actor
             # immediately before delivery rather than reuse the earlier grant.
             await loader.assert_private_source_access(client, source, job.actor_id)
         if plan.dry_run:
             return {"ok": True, "dry_run": True, "source_chat_id": str(plan.source_chat), "source_message_id": job.source["message_id"], "target_chat_id": str(plan.target_chat)}
-        response = await client.forward(source, target, job.source["message_id"], plan.random_id, plan.silent, progress)
+        response = await client.forward(source, target, job.source["message_id"], plan.random_id, plan.silent, progress, plan.protect_content)
         result = accepted_message(response, plan, expected)
         return {"ok": True, "result": result}
     except BaseException as exception:

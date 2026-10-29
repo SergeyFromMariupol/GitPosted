@@ -20,9 +20,9 @@ final class GitPostedTelegramNativeForward
             && is_file(__DIR__ . '/tools/forward_post_link_telegram.py');
     }
 
-    public static function forward(array $config, array $post, string $targetChat, int $actorId, string $randomKey, bool $silent = false): array
+    public static function forward(array $config, array $post, string $targetChat, int $actorId, string $randomKey, bool $silent = false, bool $protectContent = false): array
     {
-        return self::execute($config, $post, $targetChat, $actorId, $randomKey, $silent, false);
+        return self::execute($config, $post, $targetChat, $actorId, $randomKey, $silent, false, $protectContent);
     }
 
     public static function dryRun(array $config, array $post, string $targetChat, int $actorId): array
@@ -30,7 +30,7 @@ final class GitPostedTelegramNativeForward
         return self::execute($config, $post, $targetChat, $actorId, 'read-only-probe', false, true);
     }
 
-    private static function execute(array $config, array $post, string $targetChat, int $actorId, string $randomKey, bool $silent, bool $dryRun): array
+    private static function execute(array $config, array $post, string $targetChat, int $actorId, string $randomKey, bool $silent, bool $dryRun, bool $protectContent = false): array
     {
         if (!self::available($config)) throw new InvalidArgumentException('Сессия пересылки GitPosted недоступна. Повторите позже; режим репоста сохранён.');
         $import = json_decode((string) ($post['import_json'] ?? ''), true);
@@ -89,7 +89,7 @@ final class GitPostedTelegramNativeForward
             'session_path' => $data . '/runtime/post-links-bot/bot-' . $id . '.session',
             'source' => $source, 'actor_telegram_id' => $actorId, 'expected_source_chat_id' => $sourceChat,
             'target_chat_id' => $targetChat, 'target_username' => $targetUsername,
-            'random_id' => max(1, $randomId), 'silent' => $silent, 'dry_run' => $dryRun, 'timeout_seconds' => 80];
+            'random_id' => max(1, $randomId), 'silent' => $silent, 'protect_content'=>$protectContent, 'dry_run' => $dryRun, 'timeout_seconds' => 80];
         try {
             try {
                 $result = GitPostedPostLink::runTelegramForwardWorker($config, $input);

@@ -27,6 +27,11 @@ if (($argv[1] ?? '') === '--render') {
         eval(substr($source, strpos($source, 'function gitpostedLegalPage(')));
         gitpostedLegalPage('privacy');
     } else {
+        // Actual declarations used by panel.php; no bootstrapping, config read or PDO connection.
+        require_once dirname(__DIR__) . '/payload/src/telegram-policy.php';
+        require_once dirname(__DIR__) . '/payload/src/max-policy.php';
+        require_once dirname(__DIR__) . '/payload/src/telegram-top-hold.php';
+        require_once dirname(__DIR__) . '/payload/src/control/channel-licenses.php';
         function e(mixed $value): string { return mountEscape($value); }
         $siteHostname = 'posts.example'; $page = $mode === 'login' ? 'overview' : $mode;
         $authorized = $mode !== 'login'; $hCaptchaRequired = $hCaptchaReady = false; $hCaptchaSiteKey = '';

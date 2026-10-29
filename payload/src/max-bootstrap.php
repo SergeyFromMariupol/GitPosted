@@ -7,6 +7,12 @@ require_once __DIR__ . '/bot-commands.php';
 require_once __DIR__ . '/account.php';
 require_once __DIR__ . '/publication-plan.php';
 require_once __DIR__ . '/max-post-options.php';
+require_once __DIR__ . '/max-top-hold.php';
+require_once __DIR__ . '/max-policy.php';
+require_once __DIR__ . '/max-subscription-ui.php';
+require_once __DIR__ . '/max-top-quota-ui.php';
+require_once __DIR__ . '/max-top-calendar.php';
+require_once __DIR__ . '/max-top-ui.php';
 require_once __DIR__ . '/max-interactive.php';
 require_once __DIR__ . '/max-comments.php';
 require_once __DIR__ . '/max-rights.php';
@@ -1759,6 +1765,11 @@ final class GitPostedMaxLink
 final class GitPostedMaxBot
 {
     use GitPostedMaxPostOptions;
+    use GitPostedMaxTopHoldIntegration;
+    use GitPostedMaxPolicyTrait;
+    use GitPostedMaxSubscriptionUiTrait;
+    use GitPostedMaxTopQuotaUi;
+    use GitPostedMaxTopUi;
     use GitPostedMaxInteractive;
     use GitPostedMaxComments;
     use GitPostedMaxPostLinks;
@@ -1819,9 +1830,10 @@ final class GitPostedMaxBot
         return $this->api->me();
     }
 
-    public function setCommands(): array
+    public function setCommands(bool $attachmentIntent=false): array
     {
-        return $this->api->setCommands(gitpostedMaxCommands());
+        $commands=gitpostedMaxCommands($this->config,$attachmentIntent);
+        return $commands===[]?['success'=>true,'skipped'=>true]:$this->api->setCommands($commands);
     }
 
     public function removeSubscription(string $url): array
@@ -2092,6 +2104,7 @@ final class GitPostedMaxBot
                     AND manager_category.channel_id=p.channel_id
                    WHERE p.status='scheduled' AND p.scheduled_at<=NOW()
                      AND c.is_active=1
+                     AND " . GitPostedMaxTopHold::dueSql('c') . "
                      AND c.added_by IS NOT NULL AND c.added_by<>''
                      AND (
                        p.author_max_user_id=c.added_by
@@ -2138,7 +2151,7 @@ final class GitPostedMaxBot
                     }
                 } catch (Throwable $exception) {
                     $processedChats[$scheduledChatId] = true;
-                    $this->markPostFailed($postId, $exception);
+                    if (!($exception instanceof GitPostedMaxTopHoldException) && !($exception instanceof GitPostedMaxPolicyException)) $this->markPostFailed($postId, $exception);
                     $result['errors'][] = 'post ' . $postId . ': ' . $exception->getMessage();
                 }
             }
@@ -2161,6 +2174,7 @@ final class GitPostedMaxBot
                    WHERE p.status='sent' AND p.repeat_remaining>0
                      AND p.repeat_next_at IS NOT NULL AND p.repeat_next_at<=NOW()
                      AND c.is_active=1
+                     AND " . GitPostedMaxTopHold::dueSql('c') . "
                      AND c.added_by IS NOT NULL AND c.added_by<>''
                      AND (
                        p.author_max_user_id=c.added_by
@@ -2209,7 +2223,7 @@ final class GitPostedMaxBot
                     }
                 } catch (Throwable $exception) {
                     $processedChats[$repeatChatId] = true;
-                    $this->pdo->prepare(
+                    if (!($exception instanceof GitPostedMaxTopHoldException) && !($exception instanceof GitPostedMaxPolicyException)) $this->pdo->prepare(
                         "UPDATE posted_max_posts p
                          SET repeat_next_at=DATE_ADD(NOW(),INTERVAL 5 MINUTE),error_text=:error
                          WHERE p.id=:id AND p.status='sent'
@@ -2676,6 +2690,7 @@ final class GitPostedMaxBot
         string $userId,
         string $chatId
     ): void {
+        if ($this->handleMaxTopQuotaInput($update)) return;
         if ($userId === '' || $chatId === '' || !empty($user['is_bot'])) {
             return;
         }
@@ -2694,6 +2709,13 @@ final class GitPostedMaxBot
             return;
         }
 
+        if (!$this->maxPolicyAllowOperator($userId)) return;
+        $rawText=$update['message']['body']['text']??null;
+        if(is_string($rawText)&&preg_match('/\A\/pay(?:@\w+)?\s*\z/iuD',$rawText)===1){
+            $rawPrivate=GitPostedMaxTopQuotaView::privateActor($update,false);$known=$this->user($userId);
+            if($rawPrivate===null||$rawPrivate['actor_id']!==$userId||$rawPrivate['chat_id']!==$chatId||(int)($known['is_active']??0)!==1||!is_string($known['private_chat_id']??null)||!hash_equals($known['private_chat_id'],$chatId)){$this->api->sendToUser($userId,'Откройте подписку в личном чате бота после /start.');return;}
+            $this->showMaxSubscription($userId);return;
+        }
         $this->upsertUser($user, $chatId);
         if (!$this->isMaxUserActive($userId)) {
             $this->api->sendMessage(
@@ -3478,6 +3500,7 @@ final class GitPostedMaxBot
                         return $this->completeMaxUpdateEffectLocked(
                             'schedule_input',
                             function()use($postId,$scheduled):array{
+                                $this->assertMaxTopScheduleLocked($postId, $scheduled);
                                 $schedule=$this->pdo->prepare(
                                     "UPDATE posted_max_posts
                                      SET status='scheduled',scheduled_at=:scheduled,error_text=NULL
@@ -3730,6 +3753,16 @@ final class GitPostedMaxBot
         if ($callbackId === '' || $userId === '' || $chatId === '') {
             return;
         }
+        if (str_starts_with($payload,'gp:react:') || str_starts_with($payload,'gp:hidden:')) {
+            $this->handleMaxInteractiveCallback($callbackId,$userId,$payload,$this->extractMessage($update)); return;
+        }
+        if (!$this->maxPolicyAllowOperator($userId,$callbackId)) return;
+        if (str_starts_with($payload,'gp:subscription:')) {
+            $rawPrivate=GitPostedMaxTopQuotaView::privateActor($update,true);$known=$this->user($userId);
+            if($rawPrivate===null||$rawPrivate['actor_id']!==$userId||$rawPrivate['chat_id']!==$chatId||(int)($known['is_active']??0)!==1||!is_string($known['private_chat_id']??null)||!hash_equals($known['private_chat_id'],$chatId)){$this->api->answerCallback($callbackId,'Откройте подписку в личном чате бота.');return;}
+            if($this->handleMaxSubscriptionCallback($callbackId,$userId,$chatId,$payload))return;
+        }
+        if ($this->handleMaxTopQuotaCallback($update) || $this->handleMaxTopCallback($update)) return;
         if ($this->handleMaxAccountTransferCallback($callbackId, $userId, $payload)) return;
         $this->draftCallbackContext = ['callback_id' => $callbackId, 'chat_id' => $chatId, 'message' => $this->extractMessage($update)];
         if (str_starts_with($payload, 'gp:react:') || str_starts_with($payload, 'gp:hidden:')) {
@@ -4279,7 +4312,7 @@ final class GitPostedMaxBot
                         }
                         $claim = $this->pdo->prepare(
                             "UPDATE posted_max_posts
-                             SET status='publishing',scheduled_at=NULL,error_text=NULL
+                             SET status='publishing',error_text=NULL
                              WHERE id=:id AND status IN ('draft','scheduled','failed')"
                         );
                         $claim->execute(['id' => (int) $lockedPost['id']]);
@@ -4451,6 +4484,7 @@ final class GitPostedMaxBot
                                     $scheduled=(new DateTimeImmutable('now',$storageZone))
                                         ->modify('+'.$minutes.' minutes')
                                         ->format('Y-m-d H:i:s');
+                                    $this->assertMaxTopScheduleLocked($postId, $scheduled);
                                     $schedule=$this->pdo->prepare(
                                         "UPDATE posted_max_posts
                                          SET status='scheduled',scheduled_at=:scheduled,error_text=NULL
@@ -5290,6 +5324,8 @@ final class GitPostedMaxBot
                     'gp:repeat:' . $postId
                 )],
                 [GitPostedMaxApi::callbackButton('📅 Серия публикаций', 'gp:series:' . $postId)],
+                [$this->maxTopHoldPostButton($post)],
+                [$this->maxTopPlacementGraphButton($userId,(int)$post['channel_id'])],
                 [
                     GitPostedMaxApi::callbackButton('⏰ Отложить', 'gp:schedule:' . $postId),
                     GitPostedMaxApi::callbackButton('🔥 Опубликовать', 'gp:publish:' . $postId, 'positive'),
@@ -5481,6 +5517,9 @@ final class GitPostedMaxBot
                     return $this->completeMaxUpdateEffectLocked(
                         'repeat_timer',
                         function()use($postId,$minutes):array{
+                            $current=$this->pdo->prepare('SELECT * FROM posted_max_posts WHERE id=? LIMIT 1 FOR UPDATE');$current->execute([$postId]);$currentPost=$current->fetch(PDO::FETCH_ASSOC);if(!is_array($currentPost))throw new GitPostedMaxTopHoldException('post_locked');GitPostedMaxTopHold::assertRepeatLocked($this->pdo,$currentPost,$minutes);
+                            if($minutes>0){$channel=$this->pdo->prepare('SELECT * FROM posted_max_channels WHERE id=? LIMIT 1');$channel->execute([(int)$currentPost['channel_id']]);$this->maxPolicyRequirePremiumLocked($channel->fetch(PDO::FETCH_ASSOC));}
+                            if($minutes>0 && $currentPost['status']==='sent')$this->assertMaxTopScheduleLocked($postId,date('Y-m-d H:i:s',time()+$minutes*60));
                             $this->pdo->prepare(
                                 "UPDATE posted_max_posts
                                  SET repeat_interval_minutes=:minutes,repeat_remaining=:remaining,
@@ -5989,6 +6028,7 @@ final class GitPostedMaxBot
                     return $this->completeMaxUpdateEffectLocked(
                         'schedule_time',
                         function () use ($postId, $date, $time, $scheduled): array {
+                            $this->assertMaxTopScheduleLocked($postId, $scheduled);
                             $schedule = $this->pdo->prepare(
                                 "UPDATE posted_max_posts
                                  SET status='scheduled',scheduled_at=:scheduled,error_text=NULL
@@ -6077,6 +6117,7 @@ final class GitPostedMaxBot
                     throw new RuntimeException('Выберите будущее время публикации.');
                 }
                 $stored = $when->setTimezone($storageZone)->format('Y-m-d H:i:s');
+                $this->assertMaxTopScheduleLocked($postId, $stored);
                 $this->pdo->prepare(
                     "UPDATE posted_max_posts
                      SET status='scheduled',scheduled_at=:scheduled,error_text=NULL
@@ -6493,6 +6534,7 @@ final class GitPostedMaxBot
             $data = $existing;
         } else {
             $data = ['post_id' => $postId, 'source_status' => (string) $post['status'], 'token' => bin2hex(random_bytes(6)), 'slots' => [], 'days' => [], 'time' => '12:00'];
+            $topSignature=GitPostedMaxTopHold::submission($this->pdo,$post);if($topSignature!==null)$data['top_signature']=$topSignature;
             $this->setState($userId, 'max_series_setup', $data);
         }
         $this->showMaxSeries($callbackId, $userId, $data);
@@ -6889,6 +6931,7 @@ final class GitPostedMaxBot
                     if ((string) ($data['source_status'] ?? '') !== (string) $source['status']) {
                         throw new RuntimeException('Состояние исходного поста изменилось. Откройте новую настройку серии.');
                     }
+                    $topSignature=GitPostedMaxTopHold::submission($this->pdo,$source);if(($data['top_signature']??null)!==$topSignature)throw new GitPostedMaxTopHoldException('stale_revision');
                     $slots = array_values((array) ($data['slots'] ?? []));
                     if ($slots === [] || count($slots) > PostedPublicationPlan::MAX_SLOTS) {
                         throw new InvalidArgumentException('Выберите от 1 до 366 публикаций.');
@@ -6935,6 +6978,7 @@ final class GitPostedMaxBot
                     $ids = [];
                     foreach ($slots as $index => $slot) {
                         if ($index === 0 && (string) $source['status'] === 'draft') {
+                            $this->assertMaxTopScheduleLocked($postId,$slot['at']);
                             $update = $this->pdo->prepare("UPDATE posted_max_posts SET status='scheduled',scheduled_at=:at,
                                 pin_after_publish=:pin,delete_after_minutes=:delete_minutes,manager_category_id=:category,
                                 repeat_interval_minutes=NULL,repeat_remaining=0,repeat_next_at=NULL,error_text=NULL
@@ -6955,6 +6999,8 @@ final class GitPostedMaxBot
                                 'pin' => $slot['pin'], 'delete_minutes' => $slot['delete'] > 0 ? $slot['delete'] : null,
                             ]);
                             $newId = (int) $this->pdo->lastInsertId();
+                            GitPostedMaxTopHold::cloneLocked($this->pdo,$source,['id'=>$newId,'channel_id'=>(int)$source['channel_id']]);
+                            $this->assertMaxTopScheduleLocked($newId,$slot['at']);
                             $this->rebindMaxCopiedButtons($newId, $this->decodeJson((string) ($source['buttons_json'] ?? '')));
                             $ids[] = $newId;
                         }
@@ -7189,6 +7235,7 @@ final class GitPostedMaxBot
                         ]);
                         $newPostId=(int)$this->pdo->lastInsertId();
                         if($newPostId<=0)throw new RuntimeException('Не удалось продублировать публикацию.');
+                        GitPostedMaxTopHold::cloneLocked($this->pdo,$source,['id'=>$newPostId,'channel_id'=>(int)$source['channel_id']]);
                         $this->rebindMaxCopiedButtons($newPostId, $this->decodeJson((string) ($source['buttons_json'] ?? '')));
                         return [
                             'mode'=>'draft',
@@ -7374,6 +7421,7 @@ final class GitPostedMaxBot
                         ]);
                         $postId=(int)$this->pdo->lastInsertId();
                         if($postId<=0)throw new RuntimeException('Не удалось создать черновик из шаблона.');
+                        GitPostedMaxTopHold::fromTemplateLocked($this->pdo,$template,['id'=>$postId,'channel_id'=>(int)$lockedChannel['id']]);
                         $this->rebindMaxCopiedButtons($postId, $this->decodeJson((string) ($template['buttons_json'] ?? '')));
                         $this->applyMaxChannelPostDefaults($postId,$userId);
                         return [
@@ -7505,6 +7553,7 @@ final class GitPostedMaxBot
             $time = '--:--';
         }
         $rows = [];
+        if ($this->maxSubscriptionPaid()) $rows[]=[GitPostedMaxApi::callbackButton('Подписка','gp:subscription:open')];
         $channels = $this->channelsForUser($userId);
         foreach (array_chunk($channels, 2) as $channelRow) {
             $row = [];
@@ -7961,6 +8010,7 @@ final class GitPostedMaxBot
                 'negative'
             )];
         }
+        $rows[] = [$this->maxTopPlacementGraphButton($maxUserId,$channelId)];
         $rows[] = [GitPostedMaxApi::callbackButton('← Назад', 'gp:settings')];
         $this->api->answerCallback($callbackId, implode("\n", $lines), $rows);
     }
@@ -8054,6 +8104,7 @@ final class GitPostedMaxBot
         } catch (Throwable $exception) {
             error_log('GitPosted MAX channel registration notice: ' . $exception->getMessage());
         }
+        if ($this->maxSubscriptionPaid()) $this->showMaxSubscription($maxUserId,(int)$channel['id'],'offer');
     }
 
     private function answerChannelAccess(
@@ -8229,6 +8280,7 @@ final class GitPostedMaxBot
             [GitPostedMaxApi::callbackButton('Описание','gp:managerfield:'.$channelId.':'.$managerId.':description:'.$page)],
             [GitPostedMaxApi::callbackButton('Лимит публикаций','gp:managerfield:'.$channelId.':'.$managerId.':posts:'.$page)],
             [GitPostedMaxApi::callbackButton('Лимит закреплений','gp:managerfield:'.$channelId.':'.$managerId.':pins:'.$page)],
+            ...(($topQuotaButton=$this->maxTopQuotaButton($ownerId,$channelId,$managerId,$page,'a'))!==null?[[$topQuotaButton]]:[]),
             [GitPostedMaxApi::callbackButton('Рекламные компании','gp:managercats:'.$channelId.':'.$managerId.':'.$page)],
             [GitPostedMaxApi::callbackButton('Удалить менеджера','gp:managerremove:'.$channelId.':'.$managerId.':'.$page,'negative')],
             [GitPostedMaxApi::callbackButton('Назад','gp:managers:'.$channelId.':'.$page)],
@@ -8401,6 +8453,7 @@ final class GitPostedMaxBot
                 (!empty($editor['can_manage']) ? '✅' : '☑️') . ' Редактирование',
                 'gp:edset:'.$channelId.':'.$editorMaxUserId.':m:'.(empty($editor['can_manage'])?1:0).':'.$page
             )],
+            ...(($topQuotaButton=$this->maxTopQuotaButton($ownerMaxUserId,$channelId,$editorMaxUserId,$page,'e'))!==null?[[$topQuotaButton]]:[]),
             [GitPostedMaxApi::callbackButton(
                 'Удалить редактора',
                 'gp:edremove:' . $channelId . ':' . $editorMaxUserId . ':' . $page,
@@ -8536,7 +8589,10 @@ final class GitPostedMaxBot
     {
         return $this->withMaxPostOperationLock(
             $postId,
-            fn (): string => $this->publishPostUnlocked($postId, $repeat, $actorMaxUserId)
+            function () use ($postId, $repeat, $actorMaxUserId): string {
+                try { return $this->publishPostUnlocked($postId, $repeat, $actorMaxUserId); }
+                catch (GitPostedMaxTopHoldException|GitPostedMaxPolicyException $blocked) { $this->restoreMaxTopBlockedPublication($postId, $repeat); throw $blocked; }
+            }
         );
     }
 
@@ -8558,6 +8614,12 @@ final class GitPostedMaxBot
         if (!is_array($post)) {
             throw new RuntimeException('Публикация МАКС не найдена.');
         }
+        // Existing known/unknown attempt remains authoritative before current policy/TOP.
+        if ($this->activePublicationAttemptForPost($postId) !== null) return 'pending';
+        $post['channel_id'] = (int)$post['channel_id'];
+        $post = $this->maxPolicyPublishPreflight($post, $actorMaxUserId);
+        if ((int)($post['repeat_interval_minutes'] ?? 0) > 0 || $repeat) GitPostedMaxPolicy::requireChannel($this->pdo,$this->config,['id'=>(int)$post['channel_id'],'chat_id'=>(string)$post['chat_id']],'premium');
+        $policyProof = $post['_max_policy_preflight'] ?? null;
         $this->syncChannelById((string) $post['chat_id'], '');
         $stmt->execute(['id' => $postId]);
         $post = $stmt->fetch();
@@ -8599,6 +8661,8 @@ final class GitPostedMaxBot
                 ? ['type' => 'forward', 'mid' => $forwardMessageId]
                 : $this->maxPostReplyLink($post, (string) $post['chat_id']),
         ];
+        $topOptions = GitPostedMaxTopHold::load($this->pdo, $post);
+        if ($topOptions['enabled'] || $topOptions['revision'] > 0) $request['_max_top_options'] = $topOptions;
         GitPostedMaxApi::validateMediaAttachments((array) $request['media'], (array) $request['buttons']);
         GitPostedMaxApi::prepareMessageText(
             is_string($request['formatted_text']) ? $request['formatted_text'] : (string) $request['text'],
@@ -8623,7 +8687,8 @@ final class GitPostedMaxBot
             $repeat,
             $request,
             $baselineMessageIds,
-            $actorMaxUserId
+            $actorMaxUserId,
+            is_array($policyProof) ? $policyProof : null
         );
 
         try {
@@ -8711,7 +8776,9 @@ final class GitPostedMaxBot
             $messageId,
             $publishedTimestamp > 0
                 ? $this->maxStorageDateFromTimestamp($publishedTimestamp)
-                : null
+                : null,
+            null,
+            is_array($responseMessage) ? GitPostedMaxTopHold::validUrl($responseMessage['url'] ?? null) : null
         );
         $this->finishPublicationPin($attemptId);
         return 'confirmed';
@@ -8775,6 +8842,13 @@ final class GitPostedMaxBot
         if ($channelId <= 0) {
             throw new RuntimeException('Пост МАКС не найден.');
         }
+        GitPostedMaxPolicy::requireOperator($this->config,$maxUserId);
+        $planningProof = null;
+        if ($capability === 'schedule') {
+            $pc=$this->pdo->prepare('SELECT * FROM posted_max_channels WHERE id=? LIMIT 1');$pc->execute([$channelId]);$ph=$pc->fetch(PDO::FETCH_ASSOC);if(!is_array($ph))throw new GitPostedMaxPolicyException('channel_changed',$channelId);
+            $ps=$this->maxPolicyPreflightChannel($ph,'basic');if(!$ps['allowed'])throw new GitPostedMaxPolicyException($ps['state'],$channelId);
+            if($ps['state']!=='free')$planningProof=['channel_id'=>$channelId,'chat_id'=>(string)$ph['chat_id'],'checked_at'=>time(),'member_count'=>$ps['member_count']];
+        }
         if (!$this->ensureMaxChannelOwnerCurrent($channelId)) {
             throw new RuntimeException(
                 'Владелец канала больше не является администратором либо проверка МАКС временно недоступна.'
@@ -8790,6 +8864,7 @@ final class GitPostedMaxBot
                 $capability,
                 $requiredColumn,
                 $allowedStatuses,
+                $planningProof,
                 $operation
             ): mixed {
                 $ownsTransaction = !$this->pdo->inTransaction();
@@ -8889,6 +8964,11 @@ final class GitPostedMaxBot
                         );
                     }
                     $this->assertNoActivePublicationAttempt($postId);
+                    GitPostedMaxPolicy::requireOperator($this->config,$maxUserId);
+                    if ($capability === 'schedule') {
+                        $checked=array_replace($post,['channel_id'=>(int)$channel['id'],'chat_id'=>(string)$channel['chat_id']]);if($planningProof!==null)$checked['_max_policy_preflight']=$planningProof;
+                        $this->maxPolicyReserveLocked($checked,$channel,(string)$post['author_max_user_id'],$maxUserId);
+                    }
                     $result = $operation($post, $channel, $permission);
                     if ($ownsTransaction) {
                         $this->pdo->commit();
@@ -8951,7 +9031,8 @@ final class GitPostedMaxBot
         bool $repeat,
         array $request,
         array $baselineMessageIds,
-        ?string $actorMaxUserId = null
+        ?string $actorMaxUserId = null,
+        ?array $policyProof = null
     ): int {
         $requestJson = json_encode(
             $request,
@@ -8968,7 +9049,7 @@ final class GitPostedMaxBot
             // Detach uses the same first lock. Whichever transaction wins
             // decides whether the publication can be reserved.
             $channelLock = $this->pdo->prepare(
-                "SELECT id,chat_id,title,is_active,added_by,can_post
+                "SELECT *
                  FROM posted_max_channels
                  WHERE id=:channel LIMIT 1 FOR UPDATE"
             );
@@ -8977,6 +9058,8 @@ final class GitPostedMaxBot
             if (
                 !is_array($channel)
                 || empty($channel['is_active'])
+                || !empty($channel['is_archived'])
+                || !empty($channel['admin_blocked'])
                 || trim((string) ($channel['added_by'] ?? '')) === ''
                 || empty($channel['can_post'])
                 || !hash_equals((string) $channel['chat_id'], (string) $request['chat_id'])
@@ -8991,6 +9074,15 @@ final class GitPostedMaxBot
             if (!is_array($post) || (int) ($post['channel_id'] ?? 0) !== $channelId) {
                 throw new RuntimeException('Публикация МАКС не найдена.');
             }
+            $post['channel_id'] = $channelId;
+            $post['chat_id'] = (string)$channel['chat_id'];
+            if ($policyProof !== null) $post['_max_policy_preflight'] = $policyProof;
+            $topCurrent = GitPostedMaxTopHold::load($this->pdo, $post, true);
+            $topFrozen = array_key_exists('_max_top_options', $request)
+                ? GitPostedMaxTopHold::normalize($request['_max_top_options'], $post)
+                : ['version'=>1,'post_id'=>$postId,'channel_id'=>$channelId,'enabled'=>false,'duration_minutes'=>0,'revision'=>0];
+            if ($topCurrent !== $topFrozen) throw new GitPostedMaxTopHoldException('stale_revision');
+            GitPostedMaxTopHold::assertAvailableLocked($this->pdo, $channel);
             $activeUserIds = [
                 trim((string) ($channel['added_by'] ?? '')),
                 trim((string) ($post['author_max_user_id'] ?? '')),
@@ -9124,6 +9216,8 @@ final class GitPostedMaxBot
                 throw new RuntimeException('Публикация уже обработана другим процессом.');
             }
 
+            $this->maxPolicyReserveLocked($post,$channel,$authorId,$actorMaxUserId);
+            if ($repeat || (int)($post['repeat_interval_minutes'] ?? 0) > 0) $this->maxPolicyRequirePremiumLocked($channel);
             $chargePost = false;
             $chargePin = false;
             if ($authorId !== '' && !hash_equals($ownerId, $authorId)) {
@@ -9228,6 +9322,8 @@ final class GitPostedMaxBot
                 throw $exception;
             }
             $attemptId = (int) $this->pdo->lastInsertId();
+            GitPostedMaxTopHold::reserveLocked($this->pdo, $post, $channel,
+                ['id'=>$attemptId,'post_id'=>$postId,'channel_id'=>$channelId,'chat_id'=>(string)$request['chat_id'],'status'=>'sending'], $topFrozen);
             $this->pdo->commit();
             return $attemptId;
         } catch (Throwable $exception) {
@@ -9334,10 +9430,13 @@ final class GitPostedMaxBot
 
     private function markPublicationAttemptPending(int $attemptId, string $error): string
     {
+        $scope=$this->pdo->prepare('SELECT post_id,channel_id FROM posted_max_publish_attempts WHERE id=? LIMIT 1');$scope->execute([$attemptId]);$binding=$scope->fetch(PDO::FETCH_ASSOC);if(!is_array($binding))throw new RuntimeException('Попытка публикации МАКС не найдена.');
         $this->pdo->beginTransaction();
         try {
+            $this->pdo->prepare('SELECT id FROM posted_max_channels WHERE id=? LIMIT 1 FOR UPDATE')->execute([(int)$binding['channel_id']]);
+            $this->pdo->prepare('SELECT id FROM posted_max_posts WHERE id=? LIMIT 1 FOR UPDATE')->execute([(int)$binding['post_id']]);
             $stmt = $this->pdo->prepare(
-                "SELECT post_id,attempt_kind,status
+                "SELECT *
                  FROM posted_max_publish_attempts
                  WHERE id=:id LIMIT 1 FOR UPDATE"
             );
@@ -9354,6 +9453,7 @@ final class GitPostedMaxBot
                 $this->pdo->commit();
                 return 'pending';
             }
+            GitPostedMaxTopHold::markUnknownLocked($this->pdo, $attempt);
             $shortError = mb_substr($error, 0, 4000);
             $this->pdo->prepare(
                 "UPDATE posted_max_publish_attempts
@@ -9409,7 +9509,7 @@ final class GitPostedMaxBot
                 'channel' => (int) $scopeRow['channel_id'],
             ]);
             $stmt = $this->pdo->prepare(
-                "SELECT id,post_id,channel_id,attempt_kind,status,
+                "SELECT id,post_id,channel_id,chat_id,attempt_kind,status,
                         manager_post_quota_charged,manager_pin_quota_charged
                  FROM posted_max_publish_attempts
                  WHERE id=:id LIMIT 1 FOR UPDATE"
@@ -9434,6 +9534,7 @@ final class GitPostedMaxBot
                 'id' => $attemptId,
             ]);
             if ($failed->rowCount() === 1) {
+                GitPostedMaxTopHold::knownRejectLocked($this->pdo, $attempt);
                 $this->refundMaxManagerQuota($attempt);
                 if ((string) $attempt['attempt_kind'] === 'initial') {
                     $this->pdo->prepare(
@@ -9697,7 +9798,8 @@ final class GitPostedMaxBot
         int $attemptId,
         string $messageId,
         ?string $publishedAt = null,
-        ?string $actorMaxUserId = null
+        ?string $actorMaxUserId = null,
+        ?string $verifiedMessageUrl = null
     ): void
     {
         $messageId = trim($messageId);
@@ -9847,6 +9949,7 @@ final class GitPostedMaxBot
                 'comment_json' => $commentSnapshot === null ? null : $this->encodeJson($commentSnapshot),
             ]);
 
+            GitPostedMaxTopHold::finalizeKnownLocked($this->pdo, $attempt, $publishedAt, $messageId, $verifiedMessageUrl);
             $interval = (int) ($post['repeat_interval_minutes'] ?? 0);
             if ((string) $attempt['attempt_kind'] === 'repeat') {
                 $remaining = max(0, (int) $post['repeat_remaining'] - 1);
@@ -10392,7 +10495,8 @@ final class GitPostedMaxBot
             $attemptId,
             $messageId,
             $this->maxStorageDateFromTimestamp($publishedTimestamp),
-            $actorMaxUserId
+            $actorMaxUserId,
+            GitPostedMaxTopHold::validUrl($message['url'] ?? null)
         );
         $this->finishPublicationPin($attemptId);
     }
@@ -10486,6 +10590,8 @@ final class GitPostedMaxBot
             if (!is_array($attempt) || (string) $attempt['status'] !== 'needs_review') {
                 throw new RuntimeException('Публикация ещё не перешла к ручной проверке.');
             }
+            $topReceipt=GitPostedMaxTopHold::receipt($this->pdo,$attemptId,true);
+            if($topReceipt!==null && in_array($topReceipt['state'],['reserved','uncertain'],true))throw new GitPostedMaxTopHoldException('delivery_unknown');
             $error = 'Блокировка снята пользователем после ручной проверки канала МАКС.';
             $release = $this->pdo->prepare(
                 "UPDATE posted_max_publish_attempts
@@ -10794,6 +10900,7 @@ final class GitPostedMaxBot
             'media' => $this->maxMediaDescriptors((array) ($request['media'] ?? [])),
             'buttons' => $this->maxButtonRows((array) ($request['buttons'] ?? [])),
         ];
+        if (array_key_exists('_max_top_options', $request)) $signature['top'] = $request['_max_top_options'];
         return hash(
             'sha256',
             json_encode(
@@ -11442,6 +11549,7 @@ final class GitPostedMaxBot
              JOIN posted_max_channels c ON c.id=p.channel_id
              SET p.status='publishing'
              WHERE p.id=:id AND p.status='scheduled' AND p.scheduled_at<=NOW()
+               AND " . GitPostedMaxTopHold::dueSql('c') . "
                AND NOT EXISTS (
                  SELECT 1 FROM posted_max_publish_attempts active_attempt
                  WHERE active_attempt.gate_chat_id=c.chat_id
